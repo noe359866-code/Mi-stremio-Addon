@@ -1,0 +1,10 @@
+{
+  "id": "com.rebzyyx.latino.v1",
+  "version": "1.3.0",
+  "name": "Rebzyyx Latino PRO",
+  "description": "Latino HD directo con Vimeos y respaldo en Cuevana",
+  "logo": "https://i.imgur.com/8N987Z7.png",
+  "resources": ["stream"],
+  "types": ["movie"],
+  "idPrefixes": ["tt"]
+}
