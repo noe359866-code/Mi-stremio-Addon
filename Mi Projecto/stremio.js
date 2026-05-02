@@ -2,7 +2,7 @@ const axios = require('axios');
 const cheerio = require('cheerio');
 
 
-const TMDB_API_KEY = process.env.TMDB_API_KEY;
+const TMDB_API_KEY = process.env.dc8ef9b5bb60a28f4156168ae01b7291;
 const MY_VIEW_KEY = "r-eXUxP-hmdv-5_TnUkTRmDqFoyNVBhtazfpzqh53rA";
 
 const AXIOS_CONFIG = {
