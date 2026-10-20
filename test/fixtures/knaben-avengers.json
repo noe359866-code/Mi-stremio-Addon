@@ -1,0 +1,87 @@
+{
+ "hits": [
+  {
+   "bytes": 2362232012,
+   "cachedOrigin": "The Pirate Bay (proxy)",
+   "category": "Movies / HD",
+   "categoryId": [
+    2000000,
+    3001000
+   ],
+   "date": "2012-08-21T22:00:00+00:00",
+   "details": "https://knaben.xyz/thepiratebay/description.php?id=7555486",
+   "grabs": 31887,
+   "hash": "E9F759B6A26113F3745311DAD4BD332B4612EB60",
+   "id": "64f979bc003c844f4b6942e8453f4dd995c0064d",
+   "lastSeen": "2026-10-20T17:11:12+00:00",
+   "link": null,
+   "livePeers": 140,
+   "liveSeeders": 557,
+   "magnetUrl": "magnet:?xt=urn:btih:E9F759B6A26113F3745311DAD4BD332B4612EB60&dn=The+Avengers+2012+1080p+BRrip+X264+-+2.2GB++-+YIFY&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce&tr=udp%3A%2F%2Fopen.stealth.si%3A80%2Fannounce",
+   "peers": 137,
+   "score": null,
+   "seeders": 560,
+   "title": "The Avengers 2012 1080p BRrip X264 - 2.2GB  - YIFY",
+   "tracker": "The Pirate Bay",
+   "trackerId": "thepiratebay",
+   "virusDetection": 0.006
+  },
+  {
+   "bytes": 3199750635,
+   "cachedOrigin": "The Pirate Bay (proxy)",
+   "category": "Movies / HD",
+   "categoryId": [
+    2000000,
+    3001000
+   ],
+   "date": "2024-03-19T22:00:00+00:00",
+   "details": "https://knaben.xyz/thepiratebay/description.php?id=74891996",
+   "grabs": 15821,
+   "hash": "DD3753312F428B1E282000CCB684F462F62A5F54",
+   "id": "93d4d886b3868e979bd1437020813626113191a7",
+   "lastSeen": "2026-10-20T20:48:30+00:00",
+   "link": null,
+   "livePeers": 130,
+   "liveSeeders": 245,
+   "magnetUrl": "magnet:?xt=urn:btih:DD3753312F428B1E282000CCB684F462F62A5F54&dn=The.Avengers.2012.1080p.BluRay.DDP5.1.x265.10bit-GalaxyRG265&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce&tr=udp%3A%2F%2Fopen.stealth.si%3A80%2Fannounce",
+   "peers": 117,
+   "score": null,
+   "seeders": 256,
+   "title": "The.Avengers.2012.1080p.BluRay.DDP5.1.x265.10bit-GalaxyRG265",
+   "tracker": "The Pirate Bay",
+   "trackerId": "thepiratebay",
+   "virusDetection": 0.006
+  },
+  {
+   "bytes": 7072345964,
+   "cachedOrigin": "RuTracker.org",
+   "category": "Movies / HD",
+   "categoryId": [
+    3001000,
+    3000000
+   ],
+   "date": "2023-05-09T17:54:25+00:00",
+   "details": "https://rutracker.org/forum/viewtopic.php?t=6361732",
+   "grabs": null,
+   "hash": "71B582CDDC2BC4C780FF7EAA6FA7EF4D71BB5F62",
+   "id": "beb7b81ba95e41f4d59b9d96cbf138e3b9421d4e",
+   "lastSeen": "2026-07-26T21:48:29+00:00",
+   "link": "https://knaben.org/live/dl/rutracker/?path=xyz",
+   "livePeers": null,
+   "liveSeeders": null,
+   "magnetUrl": "magnet:?xt=urn:btih:71B582CDDC2BC4C780FF7EAA6FA7EF4D71BB5F62&dn=%D0%9C%D1%81%D1%82%D0%B8%D1%82%D0%B5%D0%BB%D0%B8+%2F+The+Avengers+%5B2012%2C+%D0%A1%D0%A8%D0%90%2C+WEB-DL+1080p%5D&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce&tr=udp%3A%2F%2Fopen.stealth.si%3A80%2Fannounce",
+   "peers": 17,
+   "score": null,
+   "seeders": 127,
+   "title": "Мстители / The Avengers [2012, США, фантастика, фэнтези, боевик, приключения, WEB-DL 1080p] [Локализованный видеоряд] Dub + Original Eng + Sub (Rus, Eng)",
+   "tracker": "RuTracker.org",
+   "trackerId": "rutracker",
+   "virusDetection": 0.0036
+  }
+ ],
+ "max_score": null,
+ "total": {
+  "relation": "eq",
+  "value": 86
+ }
+}

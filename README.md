@@ -8,7 +8,8 @@ Soporta:
 - 🍥 **Anime** (series) - catálogo de anime + ids `kitsu:`
 - Streams vía **magnet links** con calidad `4K HDR`, `1080p`, `720p`, `DVDRip` y audio `Latino / Castellano / Inglés`
 
-> **v1.1.0** — Corregido el bug de "me da otra película/serie": ver
+> **v1.2.0** — Además de HackTorrent (Latino), ahora usa **Knaben** como fuente en inglés.
+> Ver [Fuente en inglés: Knaben](#-fuente-en-inglés-knaben-v120) y
 > [Corrección de torrents equivocados](#-corrección-de-torrents-equivocados-v110).
 
 ---
@@ -23,6 +24,7 @@ hacktorrent-stremio-addon/
 ├── lib/
 │   ├── hacktorrent.js   # Catálogos (wpreact), Cinemeta, caché
 │   ├── scraper.js       # Búsqueda + detalle (magnet/calidad/temporada/episodio)
+│   ├── knaben.js        # Fuente secundaria en inglés (API pública v2 de Knaben)
 │   └── match.js         # Emparejamiento por título/título original/año/tipo
 ├── test/                # Tests con node:test (sin red)
 └── README.md
@@ -201,6 +203,48 @@ npm start
 
 ---
 
+## 🌐 Fuente en inglés: Knaben (v1.2.0)
+
+Además de HackTorrent (Latino/Dual) el addon consulta **Knaben**, un meta-indexer con
+magnet directos de ~30 trackers (The Pirate Bay, 1337x, RuTracker, Nyaa, eztv, …),
+ideal para contenido que en HackTorrent sólo está doblado o no existe.
+
+- Endpoint usado: `GET https://api.knaben.org/v2/search?q=...&sf=title&o=seeders&d=desc&s=60`
+  ([API v2 de Knaben](https://knaben.org/api/v2/); la v1 está limitada por ancho de banda).
+  No requiere clave. La v2 es de octubre de 2026; si algún día faltara, pon `KNABEN_API=https://api.knaben.org/v1`
+  **no** sirve porque v1 usa POST: en ese caso desactiva Knaben con `KNABEN_ENABLED=0`.
+- Los resultados aparecen con la etiqueta **`Knaben`** y muestran calidad, fuente, tamaño,
+  idioma (VO/Inglés), **seeders** y el **nombre exacto del release**.
+- Los de HackTorrent van primero (suelen ser Latino) y se eliminan duplicados por `infoHash`.
+
+**Filtrado estricto (misma filosofía que HackTorrent):**
+
+| Regla | Por qué |
+| --- | --- |
+| Sólo categorías de vídeo (`Movies`, `TV`, `Anime`) | descarta audio, libros, juegos, software y adultos |
+| El título debe aparecer como **frase** en el nombre del release | evita `The Bad Guys Breaking In S02E05` al buscar `Breaking Bad` |
+| Películas: año del release dentro de **±1** | evita secuelas/remakes (`The Avengers` 2012 ≠ 2015/2018) |
+| Series: **SxxExx exacto**; si no hay, sólo **packs de esa temporada** | nunca otro capítulo |
+| Sin `magnetUrl` ni `hash` → se descarta | evita resultados sin descarga posible |
+| Espaciado entre peticiones + caché 10 min + cooldown si hay HTTP 429 | respeta el rate limit de Knaben |
+
+**Variables de entorno:**
+
+| Variable | Por defecto | Descripción |
+| --- | --- | --- |
+| `KNABEN_ENABLED` | `1` | `0` desactiva la fuente por completo |
+| `KNABEN_API` | `https://api.knaben.org/v2` | base de la API |
+| `KNABEN_LIMIT` | `15` | máximo de streams devueltos por consulta |
+| `KNABEN_PAGE_SIZE` | `60` | resultados pedidos a la API (máx. 150) |
+| `KNABEN_TIMEOUT` | `9000` | timeout en ms |
+| `KNABEN_MIN_INTERVAL_MS` | `400` | espaciado mínimo entre peticiones |
+
+> Knaben es contenido **en inglés (VO)**: si un título no tiene versión latina en HackTorrent,
+> verás los releases ingleses; los subtítulos se resuelven con un addon de subtítulos
+> (OpenSubtitles). Los streams de HackTorrent siguen apareciendo primero cuando existen.
+
+---
+
 ## 🎯 Corrección de torrents equivocados (v1.1.0)
 
 **Síntoma:** en series, anime y algunas películas el addon abría otro título u otro episodio.
@@ -249,6 +293,19 @@ y que un título parecido de otro año devuelva vacío en vez de contenido ajeno
 
 ---
 
+### Solución de problemas
+
+| Síntoma | Qué revisar |
+| --- | --- |
+| No aparecen streams nuevos de `Knaben` | el hosting debe permitir salir a `api.knaben.org`; prueba `curl "https://api.knaben.org/v2/search?q=test&s=1"` |
+| Sólo veo resultados en inglés | HackTorrent no tiene ese título en Latino; prueba `KNABEN_LIMIT=25` para ver más opciones |
+| Quiero desactivar Knaben | `KNABEN_ENABLED=0` |
+| Muchos `429` en logs | sube `KNABEN_MIN_INTERVAL_MS` (p. ej. `1000`) |
+| Sigo viendo un título equivocado | revisa el **nombre del release** en el stream: si no coincide, manda el `id` (tt…/kitsu…) y temporada/episodio |
+
+---
+
 ## ⚠️ Notas Legales
-Solo para fines educativos. Verifica derechos de distribución en tu jurisdicción. Este addon no aloja contenido, solo enlaza magnets públicos indexados por HackTorrent.cc.
+Solo para fines educativos. Verifica derechos de distribución en tu jurisdicción. Este addon no aloja contenido:
+solo enlaza magnets públicos indexados por HackTorrent.cc y por Knaben (meta-indexer de trackers públicos).
 

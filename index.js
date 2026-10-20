@@ -13,6 +13,7 @@ const manifest = require('./manifest.json');
 
 const Scraper = require('./lib/scraper');
 const HT = require('./lib/hacktorrent');
+const Knaben = require('./lib/knaben');
 const {
   pickBestMatch,
   rankCandidates,
@@ -138,6 +139,24 @@ function torrentToStream(torrent, tituloFallback, extra = {}) {
   };
   if (infoHash) stream.infoHash = infoHash;
   return stream;
+}
+
+/**
+ * Une streams de varias fuentes sin duplicar el mismo torrent (mismo infoHash).
+ * Los de HackTorrent van primero (suelen ser Latino); Knaben añade inglés.
+ */
+function fusionarStreams(propios = [], externos = []) {
+  const vistos = new Set();
+  const salida = [];
+  for (const stream of [...propios, ...externos]) {
+    if (!stream || !stream.url) continue;
+    const hash = stream.infoHash || (stream.url.match(/btih:([a-fA-F0-9]{32,40})/i) || [])[1];
+    const clave = hash ? hash.toLowerCase() : stream.url;
+    if (vistos.has(clave)) continue;
+    vistos.add(clave);
+    salida.push(stream);
+  }
+  return salida;
 }
 
 /**
@@ -424,11 +443,26 @@ builder.defineStreamHandler(async ({ type, id }) => {
     if (req.fuente === 'ht' && req.slug) {
       const tipoPreferido = esSerie ? 'serie' : 'pelicula';
       const detalle = await Scraper.extraerDetalleTorrent(req.slug, tipoPreferido);
+
+      const knabenHt = Knaben.buscarStreams({
+        title: detalle?.titulo || req.slug.replace(/-/g, ' '),
+        originalTitle: detalle?.tituloOriginal || null,
+        year: detalle?.año || null,
+        type: esSerie ? 'series' : 'movie',
+        season,
+        episode
+      }).catch(err => {
+        console.warn('[Stream] Knaben falló:', err.message);
+        return [];
+      });
+
       if (!detalle || !Array.isArray(detalle.torrents) || detalle.torrents.length === 0) {
-        console.log(`[Stream] Sin torrents para ht:${req.slug}`);
-        return { streams: [] };
+        console.log(`[Stream] Sin torrents para ht:${req.slug} (se usan resultados de Knaben)`);
+        return { streams: fusionarStreams([], await knabenHt) };
       }
-      return streamsDeDetalle(detalle, { titulo: detalle.titulo, season, episode, esSerie });
+
+      const propios = streamsDeDetalle(detalle, { titulo: detalle.titulo, season, episode, esSerie }).streams || [];
+      return { streams: fusionarStreams(propios, await knabenHt) };
     }
 
     // --- CASO B: tt (Cinemeta) / kitsu / slug suelto ---
@@ -445,6 +479,20 @@ builder.defineStreamHandler(async ({ type, id }) => {
 
     const tipoObjetivo = esSerie ? 'series' : 'movie';
     console.log(`[Stream] Objetivo: "${info.title}"${info.originalTitle ? ` / "${info.originalTitle}"` : ''} (${info.year || '?'}) → ${tipoObjetivo}`);
+
+    // Knaben (inglés) se consulta en paralelo: no bloquea ni rompe HackTorrent
+    const knabenPromise = Knaben.buscarStreams({
+      title: info.title,
+      originalTitle: info.originalTitle,
+      year: info.year,
+      type: tipoObjetivo,
+      season,
+      episode
+    }).catch(err => {
+      console.warn('[Stream] Knaben falló:', err.message);
+      return [];
+    });
+    const responder = async (streams) => ({ streams: fusionarStreams(streams, await knabenPromise) });
 
     // Buscar candidatos y ordenarlos por relevancia
     let { ranked, lista } = await buscarCandidatos(info, tipoObjetivo);
@@ -479,8 +527,8 @@ builder.defineStreamHandler(async ({ type, id }) => {
     }
 
     if (ranked.length === 0) {
-      console.log(`[Stream] Sin candidatos para "${info.title}" (${id})`);
-      return { streams: [] };
+      console.log(`[Stream] Sin candidatos en HackTorrent para "${info.title}" (${id}); se usan resultados de Knaben`);
+      return responder([]);
     }
 
     // Sólo candidatos con puntuación suficiente (arriba del umbral del matcher)
@@ -548,26 +596,26 @@ builder.defineStreamHandler(async ({ type, id }) => {
         }
         if (exactos.length === 0) {
           console.log(`[Stream] ${cand.slug}: sin episodio exacto, usando ${packs.length} pack(s) de T${season}`);
-          return {
-            streams: packs
+          return responder(
+            packs
               .map(t => torrentToStream(t, detalle.titulo, { titulo: detalle.titulo, season, episode: null, esPack: true }))
               .filter(Boolean)
-          };
+          );
         }
         console.log(`[Stream] ${cand.slug} → ${exactos.length} torrent(s) para S${season}E${episode}`);
-        return {
-          streams: exactos
+        return responder(
+          exactos
             .map(t => torrentToStream(t, detalle.titulo, { titulo: detalle.titulo, season, episode }))
             .filter(Boolean)
-        };
+        );
       }
 
       console.log(`[Stream] ${cand.slug} → ${detalle.torrents.length} torrent(s)`);
-      return streamsDeDetalle(detalle, { titulo: detalle.titulo, season, episode, esSerie });
+      return responder(streamsDeDetalle(detalle, { titulo: detalle.titulo, season, episode, esSerie }).streams || []);
     }
 
-    console.log(`[Stream] Ningún candidato válido para "${info.title}" (${id})`);
-    return { streams: [] };
+    console.log(`[Stream] Ningún candidato válido para "${info.title}" (${id}); se usan resultados de Knaben`);
+    return responder([]);
   } catch (err) {
     console.error('[Stream] Error global:', err.message, err.stack?.split('\n')[1] || '');
     return { streams: [] };
@@ -711,6 +759,7 @@ if (require.main === module) {
 module.exports = addonInterface;
 module.exports.builder = builder;
 module.exports._internals = {
+  fusionarStreams,
   parseStremioId,
   variantesDeBusqueda,
   filtrarPorEpisodio,

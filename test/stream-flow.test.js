@@ -7,6 +7,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
+process.env.KNABEN_MIN_INTERVAL_MS = '0';
 const axios = require('axios');
 
 const MAGNET = (hash, dn) =>
@@ -162,6 +163,32 @@ axios.get = async (url) => {
     throw Object.assign(new Error('detail 404'), { response: { status: 404 } });
   }
 
+  // Knaben (fuente en inglés) — API v2
+  if (u.includes('api.knaben.org/v2/search')) {
+    const q = decodeURIComponent(new URL(u).searchParams.get('q') || '').toLowerCase();
+    const hits = [];
+    const push = (title, category, hash, seeders) => hits.push({
+      title, category, bytes: 2000000000, hash, seeders, liveSeeders: seeders, peers: 5,
+      magnetUrl: `magnet:?xt=urn:btih:${hash}&dn=${encodeURIComponent(title)}`,
+      tracker: 'The Pirate Bay'
+    });
+    if (q.startsWith('the avengers') && q.includes('s')) {
+      // no aplica
+    }
+    if (q.startsWith('the avengers')) {
+      push('The Avengers 2012 1080p BRrip X264 - 2.2GB - YIFY', 'Movies / HD', 'f'.repeat(40), 500);
+      push('The Avengers Age of Ultron 2015 1080p BluRay', 'Movies / HD', '1'.repeat(40), 400);
+    }
+    if (q.startsWith('breaking bad s02e05')) {
+      push('Breaking Bad S02E05 Breakage 2160p NF WEB-DL', 'TV / UHD', '2'.repeat(40), 40);
+      push('The Bad Guys Breaking In S02E05 1080p', 'TV / HD', '3'.repeat(40), 3);
+    }
+    if (q.startsWith('breaking bad s02e09')) {
+      push('Breaking Bad S02E05 Breakage 2160p NF WEB-DL', 'TV / UHD', '2'.repeat(40), 40);
+    }
+    return { status: 200, headers: {}, data: { hits } };
+  }
+
   // Cualquier otra cosa (HTML, acortalink, etc.) → no disponible
   throw Object.assign(new Error(`stub sin ruta: ${u}`), { response: { status: 404 } });
 };
@@ -177,19 +204,33 @@ function hashes(streams) {
 
 test('película: elige la de 2012 y no las secuelas ni la serie homónima', async () => {
   const { streams } = await addon.get('stream', 'movie', 'tt0848228');
-  assert.strictEqual(streams.length, 1);
-  assert.deepStrictEqual(hashes(streams), [H.avengers2012]);
-  assert.ok(streams[0].title.includes('Avengers.Los.Vengadores.2012.1080p-Lat'));
+  const hs = hashes(streams);
+  assert.ok(hs.includes(H.avengers2012), 'debe incluir el torrent Latino de HackTorrent');
+  assert.ok(!hs.includes(H.ultron2015) && !hs.includes(H.infinity2018) && !hs.includes(H.serieAvengers));
+  assert.ok(streams[0].name.startsWith('HackTorrent'), 'HackTorrent (Latino) va primero');
+
+  // Knaben añade el release en inglés, sin duplicar el de HackTorrent
+  assert.strictEqual(streams.length, 2);
+  assert.ok(streams.some(s => s.name.startsWith('Knaben') && s.url.includes('f'.repeat(40))));
+  assert.strictEqual(new Set(hs).size, hs.length, 'sin infoHash duplicados');
 });
 
-test('serie: devuelve SOLO el episodio pedido (S02E05)', async () => {
+test('película: Knaben tampoco cuela la secuela (filtro de año)', async () => {
+  const { streams } = await addon.get('stream', 'movie', 'tt0848228');
+  assert.ok(!streams.some(s => s.name.startsWith('Knaben') && s.url.includes('1'.repeat(40))));
+});
+
+test('serie: devuelve SOLO el episodio pedido (S02E05) de ambas fuentes', async () => {
   const { streams } = await addon.get('stream', 'series', 'tt0903747:2:5');
-  assert.strictEqual(streams.length, 1);
-  assert.deepStrictEqual(hashes(streams), [H.bb0205]);
-  assert.ok(streams[0].title.includes('S02E05'));
+  const hs = hashes(streams);
+  assert.ok(hs.includes(H.bb0205), 'episodio de HackTorrent');
+  assert.ok(hs.includes('2'.repeat(40)), 'episodio de Knaben');
+  assert.ok(!hs.includes('3'.repeat(40)), 'no debe colar "The Bad Guys Breaking In S02E05"');
+  assert.ok(!hs.some(h => [H.bb0101, H.bb0206].includes(h)), 'ni otro episodio');
+  assert.ok(streams.every(s => s.title.includes('S02E05')));
 });
 
-test('serie: si el episodio no existe devuelve vacío (nunca otro capítulo)', async () => {
+test('serie: si el episodio no existe, ninguna fuente devuelve otro capítulo', async () => {
   const { streams } = await addon.get('stream', 'series', 'tt0903747:2:9');
   assert.deepStrictEqual(streams, []);
 });
@@ -235,10 +276,13 @@ test('anime vía kitsu: sólo el episodio solicitado', async () => {
   assert.deepStrictEqual(hashes(streams), [H.naruto03]);
 });
 
-test('id propio ht: respeta temporada/episodio', async () => {
+test('id propio ht: respeta temporada/episodio y suma Knaben sin duplicar', async () => {
   const { streams } = await addon.get('stream', 'series', 'ht:breaking-bad:2:5');
-  assert.strictEqual(streams.length, 1);
-  assert.deepStrictEqual(hashes(streams), [H.bb0205]);
+  const hs = hashes(streams);
+  assert.ok(hs.includes(H.bb0205));
+  assert.ok(hs.includes('2'.repeat(40)));
+  assert.ok(!hs.includes('3'.repeat(40)));
+  assert.strictEqual(hs[0], H.bb0205, 'HackTorrent primero');
 });
 
 test('búsqueda de catálogo filtra por tipo (películas no traen series)', async () => {

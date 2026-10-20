@@ -1,0 +1,87 @@
+{
+ "hits": [
+  {
+   "bytes": 4521579480,
+   "cachedOrigin": "The Pirate Bay",
+   "category": "TV / HD",
+   "categoryId": [
+    2001000,
+    2000000
+   ],
+   "date": "2021-07-02T14:44:53+00:00",
+   "details": "https://knaben.xyz/thepiratebay/description.php?id=48546457",
+   "grabs": 12163,
+   "hash": "6BBAD06245A0D631B0A5E47C8CD6E5ABC9A70211",
+   "id": "d3b26fd9da6c1a1fa01368776bddf9c627dfc743",
+   "lastSeen": "2026-10-20T18:56:52+00:00",
+   "link": null,
+   "livePeers": 446,
+   "liveSeeders": 663,
+   "magnetUrl": "magnet:?xt=urn:btih:6BBAD06245A0D631B0A5E47C8CD6E5ABC9A70211&dn=Breaking.Bad.S01.S01.COMPLETE.1080p.10bit.BluRay.6CH.x265&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce&tr=udp%3A%2F%2Fopen.stealth.si%3A80%2Fannounce",
+   "peers": 382,
+   "score": null,
+   "seeders": 724,
+   "title": "Breaking.Bad.S01.S01.COMPLETE.1080p.10bit.BluRay.6CH.x265",
+   "tracker": "The Pirate Bay",
+   "trackerId": "thepiratebay",
+   "virusDetection": 0.0055
+  },
+  {
+   "bytes": 150388279869,
+   "cachedOrigin": "The Pirate Bay (proxy)",
+   "category": "TV / HD",
+   "categoryId": [
+    2000000,
+    2001000
+   ],
+   "date": "2021-02-23T22:00:00+00:00",
+   "details": "https://knaben.xyz/thepiratebay/description.php?id=41852823",
+   "grabs": 14259,
+   "hash": "B43DF67A93863EA91F2F773F00361072DA771DD3",
+   "id": "1b1b8c7cd750e812334e6307692769b0731d0f21",
+   "lastSeen": "2026-10-20T20:47:40+00:00",
+   "link": null,
+   "livePeers": 1457,
+   "liveSeeders": 496,
+   "magnetUrl": "magnet:?xt=urn:btih:B43DF67A93863EA91F2F773F00361072DA771DD3&dn=Breaking+Bad+%282008%29+Season+1-5+S01-S05+%281080p+BluRay+x265+HEVC+10bit%29&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce&tr=udp%3A%2F%2Fopen.stealth.si%3A80%2Fannounce",
+   "peers": 1462,
+   "score": null,
+   "seeders": 509,
+   "title": "Breaking Bad (2008) Season 1-5 S01-S05 (1080p BluRay x265 HEVC 10bit)",
+   "tracker": "The Pirate Bay",
+   "trackerId": "thepiratebay",
+   "virusDetection": 0.0028
+  },
+  {
+   "bytes": 7419556003,
+   "cachedOrigin": "The Pirate Bay (proxy)",
+   "category": "TV / HD",
+   "categoryId": [
+    2000000,
+    2001000
+   ],
+   "date": "2014-01-07T22:00:00+00:00",
+   "details": "https://knaben.xyz/thepiratebay/description.php?id=9450562",
+   "grabs": 7760,
+   "hash": "450DE97A0C347AD8FD641F45B2D045BF67C7E740",
+   "id": "1f5ec85c569052be02be905662bc9bb1e2a950eb",
+   "lastSeen": "2026-10-20T18:59:29+00:00",
+   "link": null,
+   "livePeers": 346,
+   "liveSeeders": 461,
+   "magnetUrl": "magnet:?xt=urn:btih:450DE97A0C347AD8FD641F45B2D045BF67C7E740&dn=Breaking+Bad+S02+Season+2+1080p+BluRay+ReEnc-DeeJayAhmed&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce&tr=udp%3A%2F%2Fopen.stealth.si%3A80%2Fannounce",
+   "peers": 333,
+   "score": null,
+   "seeders": 466,
+   "title": "Breaking Bad S02 Season 2 1080p BluRay ReEnc-DeeJayAhmed [LittleFairyRG]",
+   "tracker": "The Pirate Bay",
+   "trackerId": "thepiratebay",
+   "virusDetection": 0.0032
+  }
+ ],
+ "max_score": null,
+ "total": {
+  "relation": "eq",
+  "value": 12
+ }
+}
