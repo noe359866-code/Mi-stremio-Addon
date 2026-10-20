@@ -1,0 +1,24 @@
+{
+  "name": "hacktorrent-stremio-addon",
+  "version": "1.0.0",
+  "description": "Stremio Addon - Catálogos y Streams desde HackTorrent.cc (películas, series y anime) usando Axios y Cheerio",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "keywords": [
+    "stremio",
+    "addon",
+    "hacktorrent",
+    "torrent",
+    "stream",
+    "catalog"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "axios": "^1.7.2",
+    "cheerio": "^1.0.0-rc.12",
+    "stremio-addon-sdk": "^1.6.10"
+  }
+}

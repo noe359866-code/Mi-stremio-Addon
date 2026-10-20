@@ -1,10 +1,59 @@
 {
-  "id": "com.rebzyyx.latino.v1",
-  "version": "1.3.0",
-  "name": "Rebzyyx Latino PRO",
-  "description": "Latino HD directo con Vimeos y respaldo en Cuevana",
+  "id": "com.hacktorrent.addon",
+  "version": "1.0.0",
+  "name": "HackTorrent",
+  "description": "Catálogos y streams de películas, series y anime desde HackTorrent.cc. Provee catálogos de novedades y búsqueda, y streams vía magnets con calidad 4K/1080p/720p en Latino/Dual. Compatible con addons de subtítulos.",
   "logo": "https://i.imgur.com/8N987Z7.png",
-  "resources": ["stream"],
-  "types": ["movie"],
-  "idPrefixes": ["tt"]
+  "background": "https://image.tmdb.org/t/p/original//9BBTo63ANSmhC4e6r62OJFuK2GL.jpg",
+  "resources": [
+    "catalog",
+    "stream",
+    "meta"
+  ],
+  "types": [
+    "movie",
+    "series"
+  ],
+  "catalogs": [
+    {
+      "type": "movie",
+      "id": "hacktorrent-peliculas",
+      "name": "HackTorrent - Películas",
+      "extra": [
+        {
+          "name": "search",
+          "isRequired": false
+        },
+        {
+          "name": "genre",
+          "isRequired": false,
+          "options": ["Acción","Aventura","Comedia","Drama","Terror","Suspense","Ciencia ficción","Animación","Familia","Crimen"]
+        },
+        {
+          "name": "skip",
+          "isRequired": false
+        }
+      ]
+    },
+    {
+      "type": "series",
+      "id": "hacktorrent-series",
+      "name": "HackTorrent - Series",
+      "extra": [
+        {
+          "name": "search",
+          "isRequired": false
+        },
+        {
+          "name": "skip",
+          "isRequired": false
+        }
+      ]
+    }
+  ],
+  "idPrefixes": ["tt", "ht"],
+  "behaviorHints": {
+    "configurable": false,
+    "configurationRequired": false
+  }
 }
