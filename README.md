@@ -5,7 +5,11 @@ Addon de Stremio que provee **catálogos** y **streams** desde [https://hacktorr
 Soporta:
 - 🎬 **Películas** (movie) - catálogo de novedades + búsqueda
 - 📺 **Series** (series) - catálogo de series + episodios individuales
+- 🍥 **Anime** (series) - catálogo de anime + ids `kitsu:`
 - Streams vía **magnet links** con calidad `4K HDR`, `1080p`, `720p`, `DVDRip` y audio `Latino / Castellano / Inglés`
+
+> **v1.1.0** — Corregido el bug de "me da otra película/serie": ver
+> [Corrección de torrents equivocados](#-corrección-de-torrents-equivocados-v110).
 
 ---
 
@@ -17,7 +21,10 @@ hacktorrent-stremio-addon/
 ├── manifest.json        # Configuración Stremio (catalogs + streams)
 ├── index.js             # Servidor principal con defineCatalogHandler / defineStreamHandler
 ├── lib/
-│   └── hacktorrent.js   # Lógica de scraping (Axios + Cheerio) + API wpreact
+│   ├── hacktorrent.js   # Catálogos (wpreact), Cinemeta, caché
+│   ├── scraper.js       # Búsqueda + detalle (magnet/calidad/temporada/episodio)
+│   └── match.js         # Emparejamiento por título/título original/año/tipo
+├── test/                # Tests con node:test (sin red)
 └── README.md
 ```
 
@@ -191,6 +198,54 @@ npm start
 ### Despliegue opcional
 - **Vercel / Netlify**: haz `vercel --prod` o conecta repo a Netlify. Usa `index.js` como serverless function si lo prefieres.
 - **PORT**: Configura `PORT=7000` como variable de entorno si despliegas en contenedor.
+
+---
+
+## 🎯 Corrección de torrents equivocados (v1.1.0)
+
+**Síntoma:** en series, anime y algunas películas el addon abría otro título u otro episodio.
+
+**Causas encontradas y corregidas:**
+
+1. **Fallback `resultados[0]`** — si el emparejamiento no encontraba nada, el handler tomaba el
+   primer resultado de la búsqueda sin importar el título. Ahora, si no hay coincidencia segura,
+   se devuelven `streams: []` (mejor sin streams que con contenido ajeno).
+2. **Datos MOCK siempre activos** — cuando hacktorrent.cc fallaba o daba timeout, el scraper
+   devolvía "El Proyecto Colibrí"/"Avengers" inventados con un filtro por palabras sueltas
+   (`query.includes(titulo.split(' ')[0])`). Esa era la vía típica del "torrent de otra peli".
+   Los mocks ahora sólo se activan con `HACKTORRENT_MOCK=1` (tests/sandbox).
+3. **Scraping HTML devolvía la home** — si `?s=` no filtraba, se devolvían los 5 primeros
+   títulos de la portada. Ahora se exige coincidencia real de tokens con la búsqueda.
+4. **El tipo no se respetaba** — `findBestMatch()` tenía el filtro de tipo vacío, así que una
+   película podía resolverse contra una serie del mismo nombre (y al revés). Ahora el tipo es
+   un filtro estricto: `movie → pelicula`, `series → serie | anime`.
+5. **Año ignorado** — "The Avengers" (2012) podía caer en "Infinity War" (2018). Ahora se puntúa
+   título + título original + año (el sitio guarda títulos en español, por eso también se compara
+   `original_title`) y se descarta contenido con más de 1 año de diferencia.
+6. **Episodios de series** — si no había coincidencia de SxxExx, se devolvían **todos** los
+   episodios. Ahora se devuelve sólo el episodio pedido; si no existe, se intenta un pack de esa
+   temporada y, si tampoco hay, se prueba el siguiente candidato y finalmente se devuelve vacío.
+7. **Temporada/episodio mal leídos** — se detecta la temporada por encabezado/contenedor de la
+   tabla y el episodio por la columna `#`, la fila o el nombre del magnet (`...S02E05...`).
+   La API se recorre de forma recursiva, así que también funciona con respuestas anidadas
+   (`seasons → episodes → downloads`) o con mapas de calidad (`{"1080p": "magnet:..."}`).
+8. **Anime** — se prueban los endpoints `serie` y `anime` para el mismo slug, hay catálogo
+   "HackTorrent - Anime" y, si llega un id `kitsu:`, el título se resuelve vía API de Kitsu.
+9. **Meta handler** — usaba `id.split(':')[0]` (devolvía "ht" en lugar del slug) y los episodios
+   se generaban con `episode: [n]`; corregido para que la ficha y los episodios sean navegables.
+
+**Cómo verificarlo (sin red, con la API simulada):**
+
+```bash
+npm test
+```
+
+Cubre: elección por año entre secuelas, rechazo de tipo incorrecto, episodio exacto en series,
+temporada/episodio leídos del magnet, detección de temporadas en HTML, formas anidadas de la API
+y que un título parecido de otro año devuelva vacío en vez de contenido ajeno.
+
+> Tras actualizar el addon, **desinstálalo y vuelve a instalarlo** en Stremio (o reinicia el
+> servidor) para que el nuevo `manifest.json` (v1.1.0) y el catálogo de Anime se registren.
 
 ---
 

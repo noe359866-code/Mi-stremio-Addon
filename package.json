@@ -4,7 +4,8 @@
   "description": "Stremio Addon - Catálogos y Streams desde HackTorrent.cc (películas, series y anime) usando Axios y Cheerio",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "test": "node --test test/*.test.js"
   },
   "keywords": [
     "stremio",

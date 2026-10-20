@@ -1,8 +1,8 @@
 {
   "id": "com.hacktorrent.addon",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "name": "HackTorrent",
-  "description": "Catálogos y streams de películas, series y anime desde HackTorrent.cc. Provee catálogos de novedades y búsqueda, y streams vía magnets con calidad 4K/1080p/720p en Latino/Dual. Compatible con addons de subtítulos.",
+  "description": "Catálogos y streams de películas, series y anime desde HackTorrent.cc. Empareja por título, título original, año y tipo, y entrega sólo el episodio solicitado para evitar torrents equivocados. Magnets en 4K/1080p/720p Latino/Dual. Compatible con addons de subtítulos.",
   "logo": "https://i.imgur.com/8N987Z7.png",
   "background": "https://image.tmdb.org/t/p/original//9BBTo63ANSmhC4e6r62OJFuK2GL.jpg",
   "resources": [
@@ -27,7 +27,18 @@
         {
           "name": "genre",
           "isRequired": false,
-          "options": ["Acción","Aventura","Comedia","Drama","Terror","Suspense","Ciencia ficción","Animación","Familia","Crimen"]
+          "options": [
+            "Acción",
+            "Aventura",
+            "Comedia",
+            "Drama",
+            "Terror",
+            "Suspense",
+            "Ciencia ficción",
+            "Animación",
+            "Familia",
+            "Crimen"
+          ]
         },
         {
           "name": "skip",
@@ -49,9 +60,28 @@
           "isRequired": false
         }
       ]
+    },
+    {
+      "type": "series",
+      "id": "hacktorrent-anime",
+      "name": "HackTorrent - Anime",
+      "extra": [
+        {
+          "name": "search",
+          "isRequired": false
+        },
+        {
+          "name": "skip",
+          "isRequired": false
+        }
+      ]
     }
   ],
-  "idPrefixes": ["tt", "ht"],
+  "idPrefixes": [
+    "tt",
+    "ht",
+    "kitsu"
+  ],
   "behaviorHints": {
     "configurable": false,
     "configurationRequired": false
