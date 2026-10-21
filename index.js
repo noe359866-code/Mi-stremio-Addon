@@ -1,21 +1,43 @@
 /**
  * HackTorrent Stremio Addon - Archivo Principal
- * Recursos: catalog + stream (manifest.json)
+ * Recursos: catalog + stream + meta
  * Scraper: lib/scraper.js (Axios + Cheerio)
- * SDK: stremio-addon-sdk
- * Puerto dinámico: process.env.PORT || 7000 (compatible Render)
+ * Matching: lib/match.js (título + título original + año + tipo + temporada/episodio)
  */
 
-const { addonBuilder, serveHTTP } = require('stremio-addon-sdk');
+'use strict';
+
+const axios = require('axios');
+const { addonBuilder } = require('stremio-addon-sdk');
 const manifest = require('./manifest.json');
 
-// Usamos el nuevo scraper dedicado que cumple exactamente los requisitos del encargo
-// (funciones con User-Agent + try/catch + calidad/tamaño/magnet)
 const Scraper = require('./lib/scraper');
-// Mantenemos lib/hacktorrent.js para funciones de catálogo/cinemeta/cache si hace falta
 const HT = require('./lib/hacktorrent');
+const Knaben = require('./lib/knaben');
+const BlackHoleBay = require('./lib/theblackholebay');
+const { normalizarConfig, aplicarConfig, fuentesActivas } = require('./lib/config');
+const {
+  pickBestMatch,
+  rankCandidates,
+  similarity,
+  torrentSeasonEpisode,
+  normalizeTitle
+} = require('./lib/match');
 
 const builder = new addonBuilder(manifest);
+
+// Caché simple para Cinemeta/Kitsu (evita repetir la misma consulta por episodio)
+const META_CACHE = new Map();
+function metaCacheGet(key) {
+  const hit = META_CACHE.get(key);
+  if (!hit) return null;
+  if (Date.now() > hit.exp) { META_CACHE.delete(key); return null; }
+  return hit.value;
+}
+function metaCacheSet(key, value, ttl = 6 * 60 * 60 * 1000) {
+  if (META_CACHE.size > 500) META_CACHE.clear();
+  META_CACHE.set(key, { value, exp: Date.now() + ttl });
+}
 
 // ---------------------------------------------------------------------------
 // HELPERS
@@ -27,19 +49,15 @@ const builder = new addonBuilder(manifest);
 function toMetaPreview(item, stremioType) {
   if (!item || !item.slug) return null;
 
-  // Determinar tipo Stremio si no viene impuesto
+  const tipoItem = item.tipo || item.type || null;
   let type = stremioType;
   if (!type) {
-    if (item.tipo === 'pelicula' || item.type === 'pelicula') type = 'movie';
-    else if (item.tipo === 'serie' || item.type === 'serie' || item.tipo === 'anime' || item.type === 'anime') type = 'series';
-    else type = 'movie';
-  } else if (stremioType === 'series' && (item.tipo === 'pelicula' || item.type === 'pelicula')) {
-    // Caso borde: catálogo series pero item es peli -> mapear a movie
+    type = tipoItem === 'pelicula' ? 'movie' : 'series';
+  } else if (stremioType === 'series' && tipoItem === 'pelicula') {
     type = 'movie';
   }
 
   const slug = item.slug;
-  // Resolver poster: wpreact da "/ugXW...jpg" (path tmdb) o url completa
   let poster = item.poster || item.featured || item.image || null;
   if (poster && poster.startsWith('/')) poster = `https://image.tmdb.org/t/p/w500${poster}`;
   let background = item.background || item.background_image || item.backdrop || poster;
@@ -54,25 +72,26 @@ function toMetaPreview(item, stremioType) {
     : [];
 
   return {
-    id: `ht:${slug}`, // prefijo ht: para items propios de HackTorrent (también soportamos tt: de Cinemeta)
-    type: type,
+    id: `ht:${slug}`,
+    type,
     name: titulo,
-    poster: poster,
+    poster: poster || undefined,
     posterShape: 'poster',
-    background: background || poster,
-    logo: poster,
-    description: descripcion,
-    releaseInfo: añoStr,
+    background: background || undefined,
+    logo: poster || undefined,
+    description: descripcion || undefined,
+    releaseInfo: añoStr || undefined,
     imdbRating: item.imdbRating || item.imdb || null,
-    genres: generos
+    genres: generos.length ? generos : undefined
   };
 }
 
 /**
- * Mapea un torrent (de extraerDetalleTorrent) a un stream de Stremio
+ * Mapea un torrent (de extraerDetalleTorrent) a un stream de Stremio.
+ * Incluye el nombre real del archivo para que el usuario pueda verificar
+ * que el torrent corresponde a lo que pidió.
  */
-function torrentToStream(torrent, tituloFallback) {
-  // torrent = {calidad, calidadNormalizada, tamaño, idioma, subtitulos, fecha, magnet, torrentUrl, infoHash, temporada, episodio}
+function torrentToStream(torrent, tituloFallback, extra = {}) {
   const magnet = torrent.magnet || torrent.torrentUrl;
   if (!magnet) return null;
 
@@ -81,50 +100,302 @@ function torrentToStream(torrent, tituloFallback) {
   const idioma = torrent.idioma || torrent.language || 'Latino';
   const subs = torrent.subtitulos || (torrent.subs ? 'Sí' : 'No');
 
-  // Extraer infoHash si es magnet (para compatibilidad con clientes que prefieren infoHash)
   let infoHash = torrent.infoHash || null;
   if (!infoHash && magnet.startsWith('magnet:')) {
     const m = magnet.match(/btih:([a-fA-F0-9]{32,40})/i);
     if (m) infoHash = m[1].toLowerCase();
   }
 
-  // Título del stream: 3 líneas visibles en Stremio
-  // Línea 1: nombre archivo o título
-  // Línea 2: calidad | tamaño | idioma | subs
-  // Línea 3: fecha / temporada-episodio
-  const lineas = [];
-  const displayName = torrent.temporada && torrent.episodio
-    ? `${tituloFallback} S${String(torrent.temporada).padStart(2, '0')}E${String(torrent.episodio).padStart(2, '0')}`
-    : (tituloFallback || 'HackTorrent');
-  lineas.push(displayName);
-  lineas.push(`${calidad} | ${tamaño} | ${idioma} | Subs: ${subs}`);
-  if (torrent.fecha) lineas.push(`📅 ${torrent.fecha}`);
-  if (torrent.temporada && torrent.episodio) lineas.push(`S${torrent.temporada}E${torrent.episodio}`);
+  let dn = torrent.dn || null;
+  if (!dn && magnet.startsWith('magnet:')) {
+    const m = magnet.match(/[?&]dn=([^&]+)/);
+    if (m) { try { dn = decodeURIComponent(m[1].replace(/\+/g, ' ')); } catch { dn = m[1]; } }
+  }
 
-  const nombreFuente = `HackTorrent\n${calidad}`; // primera línea en UI de Stremio (izquierda)
+  const se = torrentSeasonEpisode(torrent);
+  const season = extra.season ?? se.season;
+  const episode = extra.episode ?? se.episode;
+  const esPack = extra.esPack === true;
+
+  const lineas = [];
+  const displayName = (season !== null && season !== undefined && episode !== null && episode !== undefined)
+    ? `${extra.titulo || tituloFallback} S${String(season).padStart(2, '0')}E${String(episode).padStart(2, '0')}`
+    : (extra.titulo || tituloFallback || 'HackTorrent');
+  lineas.push(displayName);
+  lineas.push(`🎞️ ${calidad} | 💾 ${tamaño || '?'} | 🗣️ ${idioma} | Subs: ${subs}`);
+  if (esPack) lineas.push('📦 Temporada completa (pack)');
+  if (dn) lineas.push(`📄 ${dn}`);
+  if (torrent.fecha) lineas.push(`📅 ${torrent.fecha}`);
+
+  const nombreFuente = `HackTorrent\n${calidad}`;
 
   const stream = {
     name: nombreFuente,
     title: lineas.join('\n'),
-    url: magnet, // Stremio acepta magnet directo en url
+    url: magnet,
     behaviorHints: {
-      bingeGroup: `hacktorrent-${calidad.replace(/\s+/g, '-').toLowerCase()}`,
-      // videoHash permite agrupar por calidad en binge
-      videoHash: infoHash ? `${infoHash}:${calidad}` : undefined
+      bingeGroup: `hacktorrent-${String(calidad).replace(/\s+/g, '-').toLowerCase()}`,
+      videoHash: infoHash ? `${infoHash}:${calidad}` : undefined,
+      filename: dn || undefined
+    },
+    // Metadatos internos para lib/config.js (se eliminan antes de responder)
+    _meta: {
+      fuente: 'hacktorrent',
+      idioma,
+      calidad,
+      seeders: 0,
+      pack: esPack === true
     }
   };
-  // Algunos reproductores usan infoHash + trackers separados; también lo proveemos
   if (infoHash) stream.infoHash = infoHash;
-
   return stream;
 }
 
+/**
+ * Une streams de varias fuentes sin duplicar el mismo torrent (mismo infoHash).
+ * Los de HackTorrent van primero (suelen ser Latino); Knaben añade inglés.
+ */
+function fusionarStreams(propios = [], externos = []) {
+  const vistos = new Set();
+  const salida = [];
+  for (const stream of [...propios, ...externos]) {
+    if (!stream || !stream.url) continue;
+    const hash = stream.infoHash || (stream.url.match(/btih:([a-fA-F0-9]{32,40})/i) || [])[1];
+    const clave = hash ? hash.toLowerCase() : stream.url;
+    if (vistos.has(clave)) continue;
+    vistos.add(clave);
+    salida.push(stream);
+  }
+  return salida;
+}
+
+/**
+ * Consulta todas las fuentes externas (inglés) EN PARALELO.
+ * Cualquier fallo individual se ignora: HackTorrent sigue funcionando solo.
+ *
+ * @returns {Promise<Array>} streams ya fusionados y sin duplicados
+ */
+async function buscarEnFuentesExternas({ title, originalTitle, year, type, season, episode, config }) {
+  if (!title) return [];
+
+  const activas = fuentesActivas(config);
+  const fuentes = [
+    { clave: 'knaben', nombre: 'Knaben', fn: Knaben.buscarStreams },
+    { clave: 'tbb', nombre: 'BlackHoleBay', fn: BlackHoleBay.buscarStreams }
+  ].filter(f => activas.has(f.clave));
+
+  if (fuentes.length === 0) return [];
+
+  const resultados = await Promise.allSettled(
+    fuentes.map(({ fn }) => fn({ title, originalTitle, year, type, season, episode }))
+  );
+
+  const streams = [];
+  resultados.forEach((r, i) => {
+    if (r.status === 'fulfilled') {
+      if (Array.isArray(r.value)) streams.push(...r.value);
+    } else {
+      console.warn(`[Stream] ${fuentes[i].nombre} falló:`, r.reason?.message || r.reason);
+    }
+  });
+
+  return fusionarStreams([], streams);
+}
+
+/**
+ * Parsea el id de Stremio:
+ *   tt0111161 | tt0903747:5:14 | ht:slug | ht:slug:5:14 | kitsu:1234:1:5
+ */
+function parseStremioId(id) {
+  const partes = String(id).split(':');
+
+  if (/^ht:/i.test(id)) {
+    return {
+      fuente: 'ht',
+      slug: partes[1] || null,
+      season: partes.length >= 4 ? parseInt(partes[2], 10) : null,
+      episode: partes.length >= 4 ? parseInt(partes[3], 10) : null
+    };
+  }
+
+  if (/^kitsu:/i.test(id)) {
+    // Formatos habituales: kitsu:ID  |  kitsu:ID:EP  |  kitsu:ID:TEMP:EP
+    if (partes.length >= 4) {
+      return { fuente: 'kitsu', kitsuId: partes[1] || null, season: parseInt(partes[2], 10) || 1, episode: parseInt(partes[3], 10) || null };
+    }
+    if (partes.length === 3) {
+      return { fuente: 'kitsu', kitsuId: partes[1] || null, season: 1, episode: parseInt(partes[2], 10) || null };
+    }
+    return { fuente: 'kitsu', kitsuId: partes[1] || null, season: null, episode: null };
+  }
+
+  if (/^tt\d+$/i.test(partes[0])) {
+    return {
+      fuente: 'imdb',
+      imdbId: partes[0],
+      season: partes.length >= 3 ? parseInt(partes[1], 10) : null,
+      episode: partes.length >= 3 ? parseInt(partes[2], 10) : null
+    };
+  }
+
+  // Id desconocido: intentamos usarlo como slug directo
+  return { fuente: 'slug', slug: String(id).replace(/^[a-z]+:/i, ''), season: null, episode: null };
+}
+
+/** Resuelve título/año del contenido desde Cinemeta (tt) o Kitsu (kitsu). */
+async function resolverInfo(type, req) {
+  if (req.fuente === 'imdb') {
+    const key = `cinemeta:${type}:${req.imdbId}`;
+    const cached = metaCacheGet(key);
+    if (cached) return cached;
+
+    let meta = null;
+    try {
+      meta = await HT.getCinemeta(type, req.imdbId);
+    } catch (e) {
+      console.warn(`[Stream] Cinemeta falló para ${req.imdbId}:`, e.message);
+    }
+    if (meta) {
+      const info = {
+        title: meta.name || null,
+        originalTitle: meta.originalTitle || meta.original_name || null,
+        year: meta.releaseInfo || meta.year || null
+      };
+      if (info.title) metaCacheSet(key, info);
+      return info;
+    }
+    // Último recurso: usar el propio IMDb ID como query
+    return { title: req.imdbId, originalTitle: null, year: null };
+  }
+
+  if (req.fuente === 'kitsu') {
+    const key = `kitsu:${req.kitsuId}`;
+    const cached = metaCacheGet(key);
+    if (cached) return cached;
+    try {
+      const res = await axios.get(`https://kitsu.io/api/edge/anime/${encodeURIComponent(req.kitsuId)}`, {
+        timeout: 10000,
+        headers: { Accept: 'application/vnd.api+json' }
+      });
+      const a = res.data?.data?.attributes || {};
+      const info = {
+        title: a.canonicalTitle || a.titles?.en || a.titles?.en_jp || null,
+        originalTitle: a.titles?.en_jp || a.titles?.ja_jp || null,
+        year: a.startDate ? String(a.startDate).slice(0, 4) : null,
+        tipoForzado: 'anime'
+      };
+      if (info.title) metaCacheSet(key, info);
+      return info;
+    } catch (e) {
+      console.warn(`[Stream] Kitsu falló para ${req.kitsuId}:`, e.message);
+      return { title: null, originalTitle: null, year: null, tipoForzado: 'anime' };
+    }
+  }
+
+  return { title: null, originalTitle: null, year: null };
+}
+
+/** Genera variantes de búsqueda razonables para un título. */
+function variantesDeBusqueda(info) {
+  const out = [];
+  const push = (q) => {
+    const v = String(q || '').trim();
+    if (v.length < 2) return;
+    if (!out.some(x => normalizeTitle(x) === normalizeTitle(v))) out.push(v);
+  };
+
+  push(info.title);
+  push(info.originalTitle);
+  if (info.title) {
+    // "Avengers: Infinity War" -> "Avengers Infinity War"
+    push(String(info.title).replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g, ' '));
+    // Sin año pegado al título
+    push(String(info.title).replace(/\s*\((19|20)\d{2}\)\s*$/, ''));
+    // Parte principal antes de ":" (títulos con subtítulo largo)
+    const antesDeDosPuntos = String(info.title).split(':')[0].trim();
+    if (antesDeDosPuntos.split(' ').length >= 2) push(antesDeDosPuntos);
+  }
+
+  return out.slice(0, 4);
+}
+
+/**
+ * Busca en HackTorrent juntando resultados de varias variantes del título y los
+ * ordena por similitud real (título/título original + año + tipo).
+ */
+async function buscarCandidatos(info, tipoObjetivo) {
+  const variantes = variantesDeBusqueda(info);
+  const todos = new Map();
+
+  for (const q of variantes) {
+    try {
+      const resultados = await Scraper.buscarEnHackTorrent(q, null);
+      for (const r of resultados || []) {
+        if (!r || !r.slug) continue;
+        if (!todos.has(r.slug)) todos.set(r.slug, r);
+      }
+    } catch (e) {
+      console.warn(`[Stream] Búsqueda "${q}" falló:`, e.message);
+    }
+    // Con suficientes candidatos relevantes no hace falta seguir probando
+    if (todos.size >= 8) break;
+  }
+
+  const lista = Array.from(todos.values());
+  if (lista.length === 0) return { ranked: [], variantes, lista: [] };
+
+  const ranked = rankCandidates(lista, {
+    title: info.title,
+    originalTitle: info.originalTitle,
+    year: info.year,
+    type: tipoObjetivo
+  });
+
+  return { ranked, variantes, lista };
+}
+
+/** Devuelve true si el detalle corresponde al candidato (evita redirects raros). */
+function detalleCoherente(detalle, candidato, info) {
+  const tituloDetalle = detalle?.titulo || '';
+  if (!tituloDetalle) return true;
+  const a = similarity(tituloDetalle, candidato.titulo || candidato.title || '');
+  const b = similarity(tituloDetalle, info.title || '');
+  const c = similarity(tituloDetalle, info.originalTitle || '');
+  const mejor = Math.max(a, b, c);
+  // Coincidencia muy baja y el título del detalle tampoco se parece al slug
+  if (mejor < 0.35 && similarity(tituloDetalle, String(candidato.slug || '').replace(/-/g, ' ')) < 0.5) {
+    console.warn(`[Stream] ⚠️ Detalle incoherente: "${tituloDetalle}" vs "${candidato.titulo}" (score ${mejor.toFixed(2)})`);
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Filtra torrents por temporada/episodio.
+ * - Si hay coincidencias exactas → SOLO esas (nunca otro episodio).
+ * - Si no hay exactas pero sí packs de la temporada pedida → packs (marcados).
+ * - Si no hay nada → arrays vacíos (el llamador probará otro candidato).
+ */
+function filtrarPorEpisodio(torrents, season, episode) {
+  const exactos = [];
+  const packs = [];
+
+  for (const t of torrents) {
+    const se = torrentSeasonEpisode(t);
+    if (se.season === season && se.episode === episode) {
+      exactos.push(t);
+    } else if (se.season === season && (se.episode === null || se.episode === undefined) && se.isPack) {
+      packs.push(t);
+    }
+  }
+
+  return { exactos, packs };
+}
+
 // ---------------------------------------------------------------------------
-// 1) MANEJADOR DE CATÁLOGOS - defineCatalogHandler
-//    Muestra últimos estrenos o resultados de búsqueda desde HackTorrent
+// 1) CATÁLOGOS
 // ---------------------------------------------------------------------------
 builder.defineCatalogHandler(async ({ type, id, extra }) => {
-  // Manejo de errores sólido: cualquier excepción devuelve {metas: []} y no cuelga el servidor
   try {
     console.log(`[Catalog] type=${type} id=${id} extra=${JSON.stringify(extra)}`);
 
@@ -132,36 +403,38 @@ builder.defineCatalogHandler(async ({ type, id, extra }) => {
     const skip = extra?.skip ? parseInt(extra.skip, 10) : 0;
     const page = Math.floor(skip / 20) + 1;
 
-    // --- A) BÚSQUEDA: el usuario escribió en la barra de búsqueda de Stremio ---
+    // --- A) BÚSQUEDA ---
     if (busqueda) {
       try {
-        // Usamos la función de scraping que soporta título o IMDb ID
         const resultados = await Scraper.buscarEnHackTorrent(busqueda, null);
         if (!resultados || resultados.length === 0) {
           console.log(`[Catalog] Búsqueda "${busqueda}" sin resultados`);
           return { metas: [] };
         }
-        // Filtrar por tipo de catálogo solicitado (movie vs series)
+
         let filtrados = resultados;
         if (type === 'movie') filtrados = resultados.filter(r => r.tipo === 'pelicula');
         if (type === 'series') filtrados = resultados.filter(r => r.tipo === 'serie' || r.tipo === 'anime');
 
-        const metas = filtrados.slice(0, 50).map(item => toMetaPreview(item, type)).filter(Boolean);
+        // Ordenar por relevancia de la búsqueda (los mejores primero)
+        const ranked = rankCandidates(filtrados, { title: busqueda, type });
+        const ordenados = ranked.length > 0 ? ranked.map(r => r.cand) : filtrados;
+
+        const metas = ordenados.slice(0, 50).map(item => toMetaPreview(item, type)).filter(Boolean);
         console.log(`[Catalog] Búsqueda "${busqueda}" -> ${metas.length} metas`);
         return { metas };
       } catch (err) {
         console.error(`[Catalog] Error en búsqueda "${busqueda}":`, err.message);
-        return { metas: [] }; // vacío en vez de colgarse
+        return { metas: [] };
       }
     }
 
-    // --- B) CATÁLOGO SIN BÚSQUEDA: últimos estrenos ---
+    // --- B) CATÁLOGO SIN BÚSQUEDA ---
     try {
       if (type === 'movie' && id === 'hacktorrent-peliculas') {
         const peliculas = await HT.getCatalogMovies(page);
         if (!peliculas || peliculas.length === 0) return { metas: [] };
         const metas = peliculas.map(p => toMetaPreview(p, 'movie')).filter(Boolean);
-        // Respetar paginación skip (Stremio pide de 20 en 20)
         const start = skip % 20;
         return { metas: metas.slice(start) };
       }
@@ -173,275 +446,348 @@ builder.defineCatalogHandler(async ({ type, id, extra }) => {
         const start = skip % 20;
         return { metas: metas.slice(start) };
       }
+
+      if (type === 'series' && id === 'hacktorrent-anime') {
+        const anime = await HT.getCatalogAnime(page);
+        if (!anime || anime.length === 0) return { metas: [] };
+        const metas = anime.map(a => toMetaPreview({ ...a, tipo: 'anime' }, 'series')).filter(Boolean);
+        const start = skip % 20;
+        return { metas: metas.slice(start) };
+      }
     } catch (err) {
       console.error(`[Catalog] Error cargando novedades type=${type} id=${id}:`, err.message);
       return { metas: [] };
     }
 
-    // Catálogo desconocido
     return { metas: [] };
-
   } catch (err) {
-    // Catch global para que el servidor nunca se caiga por un error de scraping
     console.error('[Catalog] Error global:', err.message);
     return { metas: [] };
   }
 });
 
 // ---------------------------------------------------------------------------
-// 2) MANEJADOR DE STREAMS - defineStreamHandler
-//    Recibe IMDb ID (tt...) o id propio ht:slug, consulta scraping y devuelve magnets
+// 2) STREAMS
 // ---------------------------------------------------------------------------
-builder.defineStreamHandler(async ({ type, id }) => {
-  // Manejo de errores sólido: siempre devolver {streams: []} en caso de fallo
+builder.defineStreamHandler(async ({ type, id, config }) => {
   try {
-    console.log(`[Stream] Solicitado type=${type} id=${id}`);
+    const cfg = normalizarConfig(config);
+    const activas = fuentesActivas(cfg);
+    const usarHackTorrent = activas.has('ht');
 
-    // Stremio envía id como:
-    //  - "tt0111161" (película)
-    //  - "tt0903747:1:1" (serie S01E01)
-    //  - "ht:el-proyecto-colibri" (item propio de nuestro catálogo)
-    //  - "ht:breaking-bad:1:1" (serie propia)
+    console.log(`[Stream] Solicitado type=${type} id=${id} cfg=${JSON.stringify(cfg)}`);
     if (!id) return { streams: [] };
 
-    const partes = id.split(':');
-    let imdbId = null;
-    let slug = null;
-    let season = null;
-    let episode = null;
-    let esIdPropio = false;
+    // Envuelve cualquier respuesta aplicando la configuración del usuario
+    const responder = (streams) => ({ streams: aplicarConfig(streams || [], cfg) });
 
-    if (id.startsWith('ht:')) {
-      esIdPropio = true;
-      slug = partes[1];
-      if (partes.length >= 4) {
-        season = parseInt(partes[2], 10);
-        episode = parseInt(partes[3], 10);
-      } else if (partes.length === 3) {
-        season = 1;
-        episode = parseInt(partes[2], 10);
+    const req = parseStremioId(id);
+    const esSerie = type === 'series';
+
+    // Año, título y episodio objetivo
+    let info = { title: null, originalTitle: null, year: null };
+    let season = Number.isFinite(req.season) ? req.season : null;
+    let episode = Number.isFinite(req.episode) ? req.episode : null;
+
+    // --- CASO A: id propio ht:slug → el slug ya identifica el contenido ---
+    if (req.fuente === 'ht' && req.slug) {
+      const tipoPreferido = esSerie ? 'serie' : 'pelicula';
+      const detalle = usarHackTorrent
+        ? await Scraper.extraerDetalleTorrent(req.slug, tipoPreferido)
+        : null;
+
+      const externasHt = buscarEnFuentesExternas({
+        title: detalle?.titulo || req.slug.replace(/-/g, ' '),
+        originalTitle: detalle?.tituloOriginal || null,
+        year: detalle?.año || null,
+        type: esSerie ? 'series' : 'movie',
+        season,
+        episode,
+        config: cfg
+      });
+
+      if (!detalle || !Array.isArray(detalle.torrents) || detalle.torrents.length === 0) {
+        console.log(`[Stream] Sin torrents para ht:${req.slug} (se usan las fuentes externas)`);
+        return responder(await externasHt);
       }
-      // Validar NaN
-      if (season && isNaN(season)) season = null;
-      if (episode && isNaN(episode)) episode = null;
+
+      const propios = streamsDeDetalle(detalle, { titulo: detalle.titulo, season, episode, esSerie }).streams || [];
+      return responder(fusionarStreams(propios, await externasHt));
+    }
+
+    // --- CASO B: tt (Cinemeta) / kitsu / slug suelto ---
+    if (req.fuente !== 'slug') {
+      info = await resolverInfo(type, req);
     } else {
-      imdbId = partes[0];
-      if (partes.length >= 3) {
-        season = parseInt(partes[1], 10);
-        episode = parseInt(partes[2], 10);
-        if (isNaN(season) || isNaN(episode)) { season = null; episode = null; }
-      }
-      // Validar que parece IMDb ID
-      if (!/^tt\d+$/.test(imdbId)) {
-        console.warn(`[Stream] id no es IMDb ni ht: "${id}"`);
-        // Intentar tratarlo como slug directo
-        slug = imdbId;
-        imdbId = null;
-        esIdPropio = true;
+      info = { title: decodeURIComponent(req.slug || '').replace(/-/g, ' '), originalTitle: null, year: null };
+    }
+
+    if (!info || !info.title) {
+      console.log(`[Stream] No se pudo resolver el título de ${id}`);
+      return { streams: [] };
+    }
+
+    const tipoObjetivo = esSerie ? 'series' : 'movie';
+    console.log(`[Stream] Objetivo: "${info.title}"${info.originalTitle ? ` / "${info.originalTitle}"` : ''} (${info.year || '?'}) → ${tipoObjetivo}`);
+
+    // Fuentes externas (inglés) en paralelo: no bloquean ni rompen HackTorrent
+    const externasPromise = buscarEnFuentesExternas({
+      title: info.title,
+      originalTitle: info.originalTitle,
+      year: info.year,
+      type: tipoObjetivo,
+      season,
+      episode,
+      config: cfg
+    });
+    const responderConExternas = async (streams) => responder(fusionarStreams(streams, await externasPromise));
+
+    // Buscar candidatos y ordenarlos por relevancia (si HackTorrent está activo)
+    let ranked = [];
+    let lista = [];
+    if (usarHackTorrent) {
+      ({ ranked, lista } = await buscarCandidatos(info, tipoObjetivo));
+    } else {
+      console.log('[Stream] HackTorrent desactivado en la configuración; sólo fuentes externas');
+    }
+    let soloPeliculaAnime = false;
+
+    if (ranked.length === 0 && info.title) {
+      // Segundo intento con título limpio y sin subtítulo
+      const limpio = String(info.title).replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim();
+      if (normalizeTitle(limpio) !== normalizeTitle(info.title)) {
+        console.log(`[Stream] Reintentando búsqueda limpia: "${limpio}"`);
+        const segundo = await buscarCandidatos({ ...info, title: limpio }, tipoObjetivo);
+        ranked = segundo.ranked;
+        if (segundo.lista.length > 0) lista = segundo.lista;
       }
     }
 
-    // --- CASO A: ID PROPIO ht:... -> directo a detalle ---
-    if (esIdPropio && slug) {
+    // Anime: muchas películas de anime están catalogadas como "anime" en el sitio.
+    // Se permiten SÓLO si el detalle resulta ser una película (sin episodios).
+    if (ranked.length === 0 && !esSerie && lista.length > 0) {
+      const animeRanked = rankCandidates(lista, {
+        title: info.title,
+        originalTitle: info.originalTitle,
+        year: info.year,
+        type: 'series'
+      }).filter(r => String(r.cand.tipo || '').toLowerCase() === 'anime');
+
+      if (animeRanked.length > 0) {
+        console.log('[Stream] Sin película directa: probando anime como película');
+        ranked = animeRanked;
+        soloPeliculaAnime = true;
+      }
+    }
+
+    if (ranked.length === 0) {
+      console.log(`[Stream] Sin candidatos en HackTorrent para "${info.title}" (${id}); se usan las fuentes externas`);
+      return responderConExternas([]);
+    }
+
+    // Sólo candidatos con puntuación suficiente (arriba del umbral del matcher)
+    const MIN_SCORE = 0.6;
+    let mejores;
+
+    if (soloPeliculaAnime) {
+      // Ya vienen filtrados como anime; el matcher estricto los descartaría por tipo
+      mejores = ranked.filter(r => r.score >= MIN_SCORE);
+      if (mejores.length === 0) mejores = ranked.slice(0, 1);
+    } else {
+      const elegidos = pickBestMatch(ranked.map(r => r.cand), {
+        title: info.title,
+        originalTitle: info.originalTitle,
+        year: info.year,
+        type: tipoObjetivo
+      });
+      mejores = elegidos.ranked.filter(r => r.score >= MIN_SCORE);
+      if (mejores.length === 0 && elegidos.best && elegidos.match) mejores = [elegidos.match];
+    }
+    console.log(`[Stream] Candidatos: ${mejores.slice(0, 5).map(r =>
+      `${r.cand.titulo || r.cand.title} [${r.cand.tipo || r.cand.type}] ${r.score.toFixed(2)}`
+    ).join(' | ')}`);
+
+    // Probar los mejores candidatos en orden; si uno no tiene el episodio
+    // pedido o su detalle es incoherente, pasamos al siguiente. NUNCA se
+    // devuelve contenido de otro título/episodio.
+    const maxCandidatos = Math.min(mejores.length, 5);
+    for (let i = 0; i < maxCandidatos; i++) {
+      const { cand, score } = mejores[i];
+      if (!cand.slug) continue;
+      if (score < 0.4) continue;
+
+      const tipoContenido = cand.tipo === 'pelicula' ? 'pelicula'
+        : cand.tipo === 'anime' ? 'anime'
+        : cand.tipo === 'serie' ? 'serie'
+        : (esSerie ? 'serie' : 'pelicula');
+
+      let detalle;
       try {
-        const detalle = await Scraper.extraerDetalleTorrent(slug, type === 'movie' ? 'pelicula' : 'serie');
-        if (!detalle || !detalle.torrents || detalle.torrents.length === 0) {
-          console.log(`[Stream] Sin torrents para ht:${slug}`);
-          return { streams: [] };
-        }
-        // Para series, filtrar por temporada/episodio si vienen
-        let torrents = detalle.torrents;
-        if (type === 'series' && season !== null && episode !== null) {
-          const filtrados = torrents.filter(t =>
-            (t.temporada === season && t.episodio === episode) ||
-            (t.season === season && t.episode === episode)
-          );
-          // Si filtrado deja vacío pero hay torrents, puede ser que el sitio no separe por temporada
-          // En ese caso devolvemos todos (la temporada es referencia visual)
-          if (filtrados.length > 0) torrents = filtrados;
-        }
-        const streams = torrents.map(t => torrentToStream(t, detalle.titulo)).filter(Boolean);
-        console.log(`[Stream] ht:${slug} -> ${streams.length} streams`);
-        return { streams };
-      } catch (err) {
-        console.error(`[Stream] Error detalle ht:${slug}:`, err.message);
-        return { streams: [] };
+        detalle = await Scraper.extraerDetalleTorrent(cand.slug, tipoContenido);
+      } catch (e) {
+        console.error(`[Stream] Error detalle ${cand.slug}:`, e.message);
+        continue;
       }
+
+      if (!detalle || !Array.isArray(detalle.torrents) || detalle.torrents.length === 0) {
+        console.log(`[Stream] ${cand.slug} sin torrents, siguiente candidato`);
+        continue;
+      }
+      if (!detalleCoherente(detalle, cand, info)) continue;
+
+      // Fichero de anime catalogado como película: si tiene episodios es una
+      // serie y no debe entregarse para una película.
+      if (soloPeliculaAnime && detalle.torrents.some(t => torrentSeasonEpisode(t).episode !== null)) {
+        console.log(`[Stream] ${cand.slug} es una serie de anime, no una película → descartado`);
+        continue;
+      }
+
+      if (esSerie && season !== null && episode !== null) {
+        const { exactos, packs } = filtrarPorEpisodio(detalle.torrents, season, episode);
+        if (exactos.length === 0 && packs.length === 0) {
+          console.log(`[Stream] ${cand.slug} no tiene S${season}E${episode}, siguiente candidato`);
+          continue;
+        }
+        if (exactos.length === 0) {
+          console.log(`[Stream] ${cand.slug}: sin episodio exacto, usando ${packs.length} pack(s) de T${season}`);
+          return responderConExternas(
+            packs
+              .map(t => torrentToStream(t, detalle.titulo, { titulo: detalle.titulo, season, episode: null, esPack: true }))
+              .filter(Boolean)
+          );
+        }
+        console.log(`[Stream] ${cand.slug} → ${exactos.length} torrent(s) para S${season}E${episode}`);
+        return responderConExternas(
+          exactos
+            .map(t => torrentToStream(t, detalle.titulo, { titulo: detalle.titulo, season, episode }))
+            .filter(Boolean)
+        );
+      }
+
+      console.log(`[Stream] ${cand.slug} → ${detalle.torrents.length} torrent(s)`);
+      return responderConExternas(streamsDeDetalle(detalle, { titulo: detalle.titulo, season, episode, esSerie }).streams || []);
     }
 
-    // --- CASO B: IMDb ID -> resolver título vía Cinemeta -> buscar en HackTorrent ---
-    if (imdbId) {
-      try {
-        // 1) Resolver título y año desde Cinemeta (v3-cinemeta.strem.io) - no requiere API key
-        let titulo = null;
-        let año = null;
-        try {
-          const cinemeta = await HT.getCinemeta(type, imdbId);
-          if (cinemeta) {
-            titulo = cinemeta.name;
-            año = cinemeta.releaseInfo ? String(cinemeta.releaseInfo).slice(0, 4) : null;
-            console.log(`[Stream] Cinemeta ${imdbId} -> "${titulo}" (${año})`);
-          }
-        } catch (e) {
-          console.warn(`[Stream] Cinemeta falló para ${imdbId}:`, e.message);
-        }
-
-        // Fallback si Cinemeta no responde: usar el propio imdbId como query (no ideal, pero evita vacío)
-        if (!titulo) {
-          console.log(`[Stream] Sin Cinemeta para ${imdbId}, usando búsqueda directa por ID`);
-          titulo = imdbId;
-        }
-
-        // 2) Buscar en HackTorrent con el título
-        let resultados = await Scraper.buscarEnHackTorrent(titulo, imdbId);
-        // Si no hay resultados, probar con título limpio (sin caracteres especiales)
-        if ((!resultados || resultados.length === 0) && titulo !== imdbId) {
-          const limpio = titulo.replace(/[^a-zA-Z0-9\s]/g, ' ').trim();
-          if (limpio && limpio !== titulo) {
-            console.log(`[Stream] Reintentando búsqueda con título limpio: "${limpio}"`);
-            resultados = await Scraper.buscarEnHackTorrent(limpio, imdbId);
-          }
-        }
-        // Último intento: 2 primeras palabras (títulos largos)
-        if ((!resultados || resultados.length === 0) && titulo.split(' ').length > 2) {
-          const corto = titulo.split(' ').slice(0, 2).join(' ');
-          console.log(`[Stream] Reintentando búsqueda corta: "${corto}"`);
-          resultados = await Scraper.buscarEnHackTorrent(corto, imdbId);
-        }
-
-        if (!resultados || resultados.length === 0) {
-          console.log(`[Stream] HackTorrent no devolvió resultados para "${titulo}" (${imdbId})`);
-          return { streams: [] };
-        }
-
-        // 3) Encontrar el mejor match (por similitud de título + año + tipo)
-        let mejor = null;
-        try {
-          mejor = HT.findBestMatch(resultados, titulo, año, null, type);
-        } catch {}
-        // Si no hay mejor por scoring, tomar el primero del tipo correcto
-        if (!mejor) {
-          const filtradosTipo = resultados.filter(r => {
-            if (type === 'movie') return r.tipo === 'pelicula';
-            if (type === 'series') return r.tipo === 'serie' || r.tipo === 'anime';
-            return true;
-          });
-          mejor = filtradosTipo[0] || resultados[0];
-          console.log(`[Stream] Sin bestMatch, usando fallback: ${mejor?.titulo} (${mejor?.slug})`);
-        } else {
-          console.log(`[Stream] Mejor match: "${mejor.titulo}" slug=${mejor.slug} tipo=${mejor.tipo} año=${mejor.año || mejor.tiempo || '?'} `);
-        }
-
-        if (!mejor || !mejor.slug) return { streams: [] };
-        slug = mejor.slug;
-
-        // 4) Extraer detalle del mejor match
-        const detalle = await Scraper.extraerDetalleTorrent(slug, type === 'movie' ? 'pelicula' : 'serie');
-        if (!detalle || !detalle.torrents || detalle.torrents.length === 0) {
-          console.log(`[Stream] Detalle de ${slug} sin torrents`);
-          return { streams: [] };
-        }
-
-        // 5) Para series, filtrar por episodio si aplica
-        let torrents = detalle.torrents;
-        if (type === 'series' && season !== null && episode !== null) {
-          const filtrados = torrents.filter(t =>
-            (t.temporada === season && t.episodio === episode) ||
-            (t.season === season && t.episode === episode) ||
-            (t.temporada == season && t.episodio == episode) // loose equality
-          );
-          if (filtrados.length > 0) {
-            console.log(`[Stream] Filtrado S${season}E${episode}: ${filtrados.length}/${torrents.length}`);
-            torrents = filtrados;
-          } else {
-            console.log(`[Stream] Sin torrents exactos para S${season}E${episode}, devolviendo todos (${torrents.length})`);
-          }
-        }
-
-        // 6) Mapear a streams de Stremio
-        const streams = torrents.map(t => torrentToStream(t, detalle.titulo)).filter(Boolean);
-        console.log(`[Stream] ${imdbId} (${titulo}) -> ${streams.length} streams vía ${slug}`);
-        return { streams };
-
-      } catch (err) {
-        console.error(`[Stream] Error procesando IMDb ${imdbId}:`, err.message);
-        return { streams: [] }; // nunca colgar
-      }
-    }
-
-    // Si no es ni ht: ni tt, devolver vacío
-    return { streams: [] };
-
+    console.log(`[Stream] Ningún candidato válido para "${info.title}" (${id}); se usan las fuentes externas`);
+    return responderConExternas([]);
   } catch (err) {
-    // Catch global para que el servidor nunca se cuelgue
     console.error('[Stream] Error global:', err.message, err.stack?.split('\n')[1] || '');
     return { streams: [] };
   }
 });
 
+/** Construye streams desde un detalle, respetando temporada/episodio si es serie. */
+function streamsDeDetalle(detalle, { titulo, season, episode, esSerie }) {
+  const torrents = Array.isArray(detalle.torrents) ? detalle.torrents : [];
+
+  if (esSerie && season !== null && episode !== null) {
+    const { exactos, packs } = filtrarPorEpisodio(torrents, season, episode);
+    if (exactos.length > 0) {
+      return {
+        streams: exactos
+          .map(t => torrentToStream(t, titulo, { titulo, season, episode }))
+          .filter(Boolean)
+      };
+    }
+    if (packs.length > 0) {
+      console.log(`[Stream] Sin S${season}E${episode} exacto: ${packs.length} pack(s) de T${season}`);
+      return {
+        streams: packs
+          .map(t => torrentToStream(t, titulo, { titulo, season, episode: null, esPack: true }))
+          .filter(Boolean)
+      };
+    }
+    console.log(`[Stream] ${titulo}: no hay torrents para S${season}E${episode} (no se devuelve otro episodio)`);
+    return { streams: [] };
+  }
+
+  return {
+    streams: torrents
+      .map(t => torrentToStream(t, titulo, { titulo, season: null, episode: null }))
+      .filter(Boolean)
+  };
+}
+
 // ---------------------------------------------------------------------------
-// OPCIONAL: Meta Handler para items propios ht:... (mejora la vista en Stremio)
+// 3) META
 // ---------------------------------------------------------------------------
 builder.defineMetaHandler(async ({ type, id }) => {
   try {
     if (!id.startsWith('ht:')) return { meta: null };
-    const slug = id.split(':')[0].replace('ht:', '');
-    // Usamos Scraper para obtener detalle y construir meta
+    const partes = id.split(':');
+    const slug = partes[1];
+    if (!slug) return { meta: null };
+
     let detalle = null;
     try {
       detalle = await Scraper.extraerDetalleTorrent(slug, type === 'movie' ? 'pelicula' : 'serie');
-    } catch {}
-    // Fallback a HT cache
-    if (!detalle || !detalle.titulo) {
-      detalle = type === 'movie' ? await HT.getMovieDetail(slug) : await HT.getSerieDetail(slug);
-      if (!detalle) return { meta: null };
-      // HT.get*Detail devuelve estructura distinta, normalizar
-      detalle = {
-        titulo: detalle.title, slug: detalle.slug,
-        torrents: (detalle.downloads || []).map(d => ({
-          calidad: d.quality, tamaño: d.size, idioma: d.language,
-          magnet: d.download_link, temporada: d.season, episodio: d.episode
-        }))
-      };
+    } catch { /* seguimos con el fallback */ }
+
+    if (!detalle || !detalle.titulo || (detalle.torrents || []).length === 0) {
+      const htDetalle = type === 'movie' ? await HT.getMovieDetail(slug) : await HT.getSerieDetail(slug);
+      if (htDetalle) {
+        detalle = {
+          titulo: htDetalle.title,
+          tituloOriginal: htDetalle.original_title,
+          slug: htDetalle.slug || slug,
+          año: htDetalle.year || htDetalle.years || null,
+          descripcion: htDetalle.overview || '',
+          poster: htDetalle.featured
+            ? (String(htDetalle.featured).startsWith('/') ? `https://image.tmdb.org/t/p/w300${htDetalle.featured}` : htDetalle.featured)
+            : null,
+          background: htDetalle.background_image || null,
+          genres: htDetalle.genres || null,
+          torrents: (htDetalle.downloads || []).map(d => ({
+            calidad: d.quality,
+            tamaño: d.size,
+            idioma: d.language,
+            magnet: d.download_link,
+            temporada: d.season,
+            episodio: d.episode
+          }))
+        };
+      }
     }
     if (!detalle) return { meta: null };
 
-    // Construir videos para series (lista de episodios)
-    let videos = undefined;
-    if (type === 'series' && detalle.torrents && detalle.torrents.length > 0) {
+    // Videos (episodios) para series
+    let videos;
+    if (type === 'series' && Array.isArray(detalle.torrents) && detalle.torrents.length > 0) {
       const seen = new Map();
       for (const t of detalle.torrents) {
-        const temp = t.temporada ?? t.season ?? 1;
-        const ep = t.episodio ?? t.episode;
-        if (!ep) continue;
-        const key = `${temp}:${ep}`;
-        if (!seen.has(key)) {
-          seen.set(key, {
-            id: `ht:${slug}:${temp}:${ep}`,
-            title: `Episodio ${ep} - ${t.calidad || 'WEB-DL'}`,
-            season: temp,
-            episode: [ep],
-            released: detalle.año || '',
-            overview: detalle.descripcion || ''
-          });
-        }
+        const se = torrentSeasonEpisode(t);
+        if (se.season === null || se.episode === null) continue;
+        const key = `${se.season}:${se.episode}`;
+        if (seen.has(key)) continue;
+        seen.set(key, {
+          id: `ht:${slug}:${se.season}:${se.episode}`,
+          title: `T${se.season} E${se.episode} - ${t.calidad || 'WEB-DL'}`,
+          season: se.season,
+          episode: se.episode,
+          released: detalle.año ? `${String(detalle.año).slice(0, 4)}-01-01T00:00:00.000Z` : undefined,
+          overview: detalle.descripcion || ''
+        });
       }
-      videos = Array.from(seen.values());
-      if (videos.length === 0) videos = undefined;
+      if (seen.size > 0) {
+        videos = Array.from(seen.values()).sort((a, b) => a.season - b.season || a.episode - b.episode);
+      }
     }
 
-    const meta = {
-      id: id.split(':').slice(0, 2).join(':'), // ht:slug
-      type: type,
-      name: detalle.titulo,
-      poster: detalle.poster || null,
-      background: detalle.background || detalle.poster || null,
-      description: detalle.descripcion || detalle.overview || '',
-      releaseInfo: detalle.año || '',
-      genres: detalle.generos ? String(detalle.generos).split(',').map(g => g.trim()).filter(Boolean) : [],
-      videos: videos
+    return {
+      meta: {
+        id: `ht:${slug}`,
+        type,
+        name: detalle.titulo,
+        poster: detalle.poster || undefined,
+        background: detalle.background || detalle.poster || undefined,
+        description: detalle.descripcion || detalle.overview || '',
+        releaseInfo: detalle.año ? String(detalle.año).slice(0, 4) : '',
+        genres: detalle.genres
+          ? String(detalle.genres).split(',').map(g => g.trim()).filter(Boolean)
+          : undefined,
+        videos
+      }
     };
-    return { meta };
   } catch (err) {
     console.error('[Meta] Error:', err.message);
     return { meta: null };
@@ -449,23 +795,40 @@ builder.defineMetaHandler(async ({ type, id }) => {
 });
 
 // ---------------------------------------------------------------------------
-// 3) CONFIGURACIÓN DEL SERVIDOR - Puerto dinámico para Render
+// 4) SERVIDOR (con página de configuración web en /configure)
 // ---------------------------------------------------------------------------
 const addonInterface = builder.getInterface();
 
-// Solo arrancar servidor HTTP si se ejecuta directamente (no cuando se importa como módulo)
 if (require.main === module) {
-  const port = process.env.PORT || 7000; // Render inyecta PORT, local usa 7000
-  serveHTTP(addonInterface, {
-    port: port,
-    cacheMaxAge: 3600 * 6, // cache 6 horas para catálogos
-    // CORS abierto para Stremio
+  const { createApp } = require('./lib/server');
+  const port = process.env.PORT || 7000;
+  const app = createApp(addonInterface);
+
+  // 0.0.0.0 para funcionar detrás de proxies (Render, Docker, previews)
+  const server = app.listen(port, '0.0.0.0', () => {
+    console.log(`🚀 HackTorrent Addon corriendo en el puerto ${port}`);
+    console.log(`   Configuración: /configure`);
+    console.log(`   Manifest:      /manifest.json`);
+    console.log(`   Catálogos:     ${manifest.catalogs.map(c => c.name).join(', ')}`);
+    console.log(`   Fuentes:       HackTorrent (Latino) + Knaben${BlackHoleBay.BLACKHOLEBAY_ENABLED ? ' + Black Hole Bay' : ' (Black Hole Bay opcional)'}`);
   });
-  console.log(`🚀 HackTorrent Addon corriendo en http://localhost:${port}/manifest.json`);
-  console.log(`   Catálogos: ${manifest.catalogs.map(c => c.name).join(', ')}`);
-  console.log(`   Puerto: ${port} (env PORT=${process.env.PORT || 'no definido -> 7000'})`);
+
+  const apagar = () => server.close(() => process.exit(0));
+  process.on('SIGTERM', apagar);
+  process.on('SIGINT', apagar);
 }
 
-// Exportar interface para tests y para despliegue serverless (Vercel, Netlify)
 module.exports = addonInterface;
 module.exports.builder = builder;
+module.exports._internals = {
+  fusionarStreams,
+  normalizarConfig,
+  aplicarConfig,
+  buscarEnFuentesExternas,
+  parseStremioId,
+  variantesDeBusqueda,
+  filtrarPorEpisodio,
+  torrentToStream,
+  detalleCoherente,
+  streamsDeDetalle
+};

@@ -1,10 +1,11 @@
 {
   "name": "hacktorrent-stremio-addon",
-  "version": "1.0.0",
-  "description": "Stremio Addon - Catálogos y Streams desde HackTorrent.cc (películas, series y anime) usando Axios y Cheerio",
+  "version": "1.4.0",
+  "description": "Stremio Addon - Catálogos y streams desde HackTorrent.cc (Latino) + Knaben y The Black Hole Bay (inglés) para películas, series y anime",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "test": "node --test test/*.test.js"
   },
   "keywords": [
     "stremio",
@@ -19,6 +20,7 @@
   "dependencies": {
     "axios": "^1.7.2",
     "cheerio": "^1.0.0-rc.12",
-    "stremio-addon-sdk": "^1.6.10"
+    "stremio-addon-sdk": "^1.6.10",
+    "express": "^4.19.2"
   }
 }

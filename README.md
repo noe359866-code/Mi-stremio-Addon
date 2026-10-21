@@ -5,7 +5,12 @@ Addon de Stremio que provee **catálogos** y **streams** desde [https://hacktorr
 Soporta:
 - 🎬 **Películas** (movie) - catálogo de novedades + búsqueda
 - 📺 **Series** (series) - catálogo de series + episodios individuales
+- 🍥 **Anime** (series) - catálogo de anime + ids `kitsu:`
 - Streams vía **magnet links** con calidad `4K HDR`, `1080p`, `720p`, `DVDRip` y audio `Latino / Castellano / Inglés`
+
+> **v1.4.0** — Página web de **configuración** (`/configure`): idioma, fuentes, calidad,
+> orden, packs y máximo de resultados. Ver [Configuración web](#-configuración-web-configure-v140).
+> Fuentes: **HackTorrent** (Latino), **Knaben** y **The Black Hole Bay** (opcional).
 
 ---
 
@@ -17,7 +22,16 @@ hacktorrent-stremio-addon/
 ├── manifest.json        # Configuración Stremio (catalogs + streams)
 ├── index.js             # Servidor principal con defineCatalogHandler / defineStreamHandler
 ├── lib/
-│   └── hacktorrent.js   # Lógica de scraping (Axios + Cheerio) + API wpreact
+│   ├── hacktorrent.js   # Catálogos (wpreact), Cinemeta, caché
+│   ├── scraper.js       # Búsqueda + detalle (magnet/calidad/temporada/episodio)
+│   ├── knaben.js        # Fuente en inglés: API pública v2 de Knaben
+│   ├── theblackholebay.js # Fuente opcional: API REST de The Black Hole Bay
+│   ├── release.js       # Reglas compartidas de filtrado de releases externos
+│   ├── config.js        # Configuración válida + filtros/orden de los streams
+│   ├── configPage.js    # Página HTML de /configure (sin dependencias)
+│   ├── server.js        # Express: /configure, /health y el router del SDK
+│   └── match.js         # Emparejamiento por título/título original/año/tipo
+├── test/                # Tests con node:test (sin red)
 └── README.md
 ```
 
@@ -194,6 +208,177 @@ npm start
 
 ---
 
+## ⚙️ Configuración web (/configure) (v1.4.0)
+
+La configuración vive **en la propia URL** del addon (protocolo de configuración de Stremio),
+así que no hace falta base de datos ni cuenta: cada URL = una configuración.
+
+```
+https://tu-addon.com/configure        ← página con el formulario
+https://tu-addon.com/{configJSON}/manifest.json   ← addon ya configurado
+```
+
+La página (`/`) redirige a `/configure` y muestra:
+
+| Opción | Valores | Efecto |
+| --- | --- | --- |
+| **Idioma del audio** | `ambos` · `latino` · `ingles` | filtra los streams por idioma (`Latino/Inglés` o `Dual` cuentan para ambos) |
+| **Fuentes** | `ht` (HackTorrent) · `knaben` · `tbb` (Black Hole Bay) | desactiva las que no quieras; las consultas se hacen sólo a las activas |
+| **Calidad mínima** | `cualquiera` · `720p` · `1080p` · `4k` | descarta calidad inferior |
+| **Orden** | `latino` · `seeders` · `calidad` | orden de la lista de streams |
+| **Máximo de resultados** | 10 / 20 / 25 / 40 / 60 | evita listas eternas |
+| **Packs de temporada** | sí / no | si se desactivan, nunca se ofrece un pack en lugar del episodio |
+
+Detalles de implementación:
+
+- `lib/config.js` normaliza cualquier entrada (JSON, query string, alias como `language`/`sources`)
+  y valida rangos: `max` se acota a 5–60 y las fuentes desconocidas se ignoran.
+- Cada stream viaja internamente con un `_meta` (fuente, idioma, calidad, seeders, pack) que se
+  usa para filtrar/ordenar y **se elimina antes de responder** a Stremio.
+- Si el filtro de idioma o de calidad deja la lista vacía, se muestran todos los resultados
+  (mejor VO que nada). Con los **packs** no hay excepción: si los desactivas, no aparecen.
+- `/health` devuelve `{ ok, name, version }` para Render/UptimeRobot.
+- Ejemplos de URL:
+
+```text
+/configure?idioma=latino&fuentes=ht
+/configure?idioma=ingles&fuentes=knaben,tbb&calidad=1080p&orden=seeders&max=40
+```
+
+> El manifest declara `config` + `behaviorHints.configurable: true`, así que Stremio muestra el
+> botón **Configure**. Al cambiar opciones hay que **reinstalar** con la nueva URL (Stremio
+> guarda la URL completa, configuración incluida).
+
+---
+
+## 🌐 Fuentes externas en inglés: Knaben y The Black Hole Bay (v1.3.0)
+
+Además de HackTorrent (Latino/Dual) el addon consulta indexadores en inglés. Todas las
+fuentes pasan por **las mismas reglas** de `lib/release.js` (título como frase, año, SxxExx),
+así que ninguna puede colar un torrent de otra película o de otro episodio.
+
+| Fuente | Estado | API | Aporta |
+| --- | --- | --- | --- |
+| **HackTorrent** | siempre | wpreact + HTML | Latino / Castellano / Dual (primero en la lista) |
+| **Knaben** | activa (`KNABEN_ENABLED=1`) | `GET api.knaben.org/v2/search` | ~30 trackers (TPB, 1337x, RuTracker, Nyaa, eztv…), magnets directos y seeders reales |
+| **The Black Hole Bay** | **desactivada** (`BLACKHOLEBAY_ENABLED=0`) | `GET theblackholebay.lol/api/search` | TPB + 1337x + YTS, su **crawler DHT** y subidas de usuarios |
+
+Los resultados aparecen etiquetados (`Knaben` / `Black Hole Bay`), van **después** de los de
+HackTorrent y se deduplican por `infoHash` entre todas las fuentes.
+
+### The Black Hole Bay (opcional)
+
+```bash
+BLACKHOLEBAY_ENABLED=1   # activarla
+```
+
+Detalles verificados de su API ([docs](https://theblackholebay.lol/api)):
+
+- `GET /api/search?q=...&category=200` — sin autenticación; 120 peticiones/minuto/IP.
+  `category` es numérica: **200 = vídeo** (por eso siempre se pide 200 y se acepta 200-299;
+  los resultados vienen con subcódigo 207/208).
+- Devuelve `name`, `info_hash`, `magnet`, `seeders`, `leechers`, `size`, `sizeLabel`,
+  `source` (TPB, 1337x, YTS, DHT, User_Upload). No hay `year` ni temporada: el filtrado
+  se hace sobre el nombre del release.
+- **Por qué está desactivada por defecto:**
+  1. **Se solapa mucho con Knaben**: los mismos torrents de TPB con el mismo `infoHash`
+     (YIFY/GalaxyRG, etc.). Añadiría poco y multiplicaría las peticiones.
+  2. Su portada muestra *“LIVE API UNAVAILABLE – SERVING FROM LOCAL INDEX”* cuando el índice
+     remoto falla; en ese modo responde desde un índice local pequeño y más antiguo.
+  3. En series devuelve sobre todo **packs de temporada**; los episodios sueltos escasean
+     (con el filtro estricto eso significa “sin resultados” más a menudo).
+  4. La respuesta es **muy pesada** (magnets con decenas de trackers): se limita a
+     `BLACKHOLEBAY_MAX_BYTES` (8 MB) para no consumir memoria.
+- Lo que sí aporta: magnets descubiertos por **DHT** y subidas de usuarios que no aparecen
+  en Knaben, y una alternativa si Knaben te limita por IP.
+
+### Variables de entorno de las fuentes externas
+
+| Variable | Por defecto | Descripción |
+| --- | --- | --- |
+| `KNABEN_ENABLED` | `1` | `0` desactiva Knaben |
+| `KNABEN_API` | `https://api.knaben.org/v2` | base de la API |
+| `KNABEN_LIMIT` | `15` | máximo de streams de Knaben por consulta |
+| `KNABEN_PAGE_SIZE` | `60` | resultados pedidos a la API (máx. 150) |
+| `KNABEN_TIMEOUT` | `9000` | timeout en ms |
+| `KNABEN_MIN_INTERVAL_MS` | `400` | espaciado mínimo entre peticiones |
+| `BLACKHOLEBAY_ENABLED` | `0` | `1` activa The Black Hole Bay |
+| `BLACKHOLEBAY_API` | `https://theblackholebay.lol/api` | base de la API |
+| `BLACKHOLEBAY_LIMIT` | `10` | máximo de streams de esta fuente |
+| `BLACKHOLEBAY_TIMEOUT` | `9000` | timeout en ms |
+| `BLACKHOLEBAY_MAX_BYTES` | `8388608` | tamaño máximo de respuesta |
+| `BLACKHOLEBAY_MIN_INTERVAL_MS` | `300` | espaciado mínimo entre peticiones |
+
+> Las fuentes externas son contenido **en inglés (VO)**: se resuelven subtítulos con un addon
+> tipo OpenSubtitles. Si un título está en Latino, HackTorrent aparece siempre primero.
+
+---
+
+## 🎯 Corrección de torrents equivocados (v1.1.0)
+
+**Síntoma:** en series, anime y algunas películas el addon abría otro título u otro episodio.
+
+**Causas encontradas y corregidas:**
+
+1. **Fallback `resultados[0]`** — si el emparejamiento no encontraba nada, el handler tomaba el
+   primer resultado de la búsqueda sin importar el título. Ahora, si no hay coincidencia segura,
+   se devuelven `streams: []` (mejor sin streams que con contenido ajeno).
+2. **Datos MOCK siempre activos** — cuando hacktorrent.cc fallaba o daba timeout, el scraper
+   devolvía "El Proyecto Colibrí"/"Avengers" inventados con un filtro por palabras sueltas
+   (`query.includes(titulo.split(' ')[0])`). Esa era la vía típica del "torrent de otra peli".
+   Los mocks ahora sólo se activan con `HACKTORRENT_MOCK=1` (tests/sandbox).
+3. **Scraping HTML devolvía la home** — si `?s=` no filtraba, se devolvían los 5 primeros
+   títulos de la portada. Ahora se exige coincidencia real de tokens con la búsqueda.
+4. **El tipo no se respetaba** — `findBestMatch()` tenía el filtro de tipo vacío, así que una
+   película podía resolverse contra una serie del mismo nombre (y al revés). Ahora el tipo es
+   un filtro estricto: `movie → pelicula`, `series → serie | anime`.
+5. **Año ignorado** — "The Avengers" (2012) podía caer en "Infinity War" (2018). Ahora se puntúa
+   título + título original + año (el sitio guarda títulos en español, por eso también se compara
+   `original_title`) y se descarta contenido con más de 1 año de diferencia.
+6. **Episodios de series** — si no había coincidencia de SxxExx, se devolvían **todos** los
+   episodios. Ahora se devuelve sólo el episodio pedido; si no existe, se intenta un pack de esa
+   temporada y, si tampoco hay, se prueba el siguiente candidato y finalmente se devuelve vacío.
+7. **Temporada/episodio mal leídos** — se detecta la temporada por encabezado/contenedor de la
+   tabla y el episodio por la columna `#`, la fila o el nombre del magnet (`...S02E05...`).
+   La API se recorre de forma recursiva, así que también funciona con respuestas anidadas
+   (`seasons → episodes → downloads`) o con mapas de calidad (`{"1080p": "magnet:..."}`).
+8. **Anime** — se prueban los endpoints `serie` y `anime` para el mismo slug, hay catálogo
+   "HackTorrent - Anime" y, si llega un id `kitsu:`, el título se resuelve vía API de Kitsu.
+9. **Meta handler** — usaba `id.split(':')[0]` (devolvía "ht" en lugar del slug) y los episodios
+   se generaban con `episode: [n]`; corregido para que la ficha y los episodios sean navegables.
+
+**Cómo verificarlo (sin red, con la API simulada):**
+
+```bash
+npm test
+```
+
+Cubre: elección por año entre secuelas, rechazo de tipo incorrecto, episodio exacto en series,
+temporada/episodio leídos del magnet, detección de temporadas en HTML, formas anidadas de la API
+y que un título parecido de otro año devuelva vacío en vez de contenido ajeno.
+
+> Tras actualizar el addon, **desinstálalo y vuelve a instalarlo** en Stremio (o reinicia el
+> servidor) para que el nuevo `manifest.json` (v1.1.0) y el catálogo de Anime se registren.
+
+---
+
+### Solución de problemas
+
+| Síntoma | Qué revisar |
+| --- | --- |
+| No aparecen streams nuevos de `Knaben` | el hosting debe permitir salir a `api.knaben.org`; prueba `curl "https://api.knaben.org/v2/search?q=test&s=1"` |
+| Sólo veo resultados en inglés | HackTorrent no tiene ese título en Latino; prueba `KNABEN_LIMIT=25` para ver más opciones |
+| Quiero desactivar Knaben | `KNABEN_ENABLED=0` |
+| Quiero activar The Black Hole Bay | `BLACKHOLEBAY_ENABLED=1` |
+| Cambié opciones y no se aplican | reinstala el addon con la nueva URL de `/configure` (la config va en la URL) |
+| La página `/configure` no carga | el servidor debe escuchar en `0.0.0.0` (ya es el comportamiento por defecto) y permitir el dominio del proxy |
+| TBB no devuelve episodios sueltos | normal: su índice tiene sobre todo packs; usa Knaben para episodios |
+| Muchos `429` en logs | sube `KNABEN_MIN_INTERVAL_MS` (p. ej. `1000`) |
+| Sigo viendo un título equivocado | revisa el **nombre del release** en el stream: si no coincide, manda el `id` (tt…/kitsu…) y temporada/episodio |
+
+---
+
 ## ⚠️ Notas Legales
-Solo para fines educativos. Verifica derechos de distribución en tu jurisdicción. Este addon no aloja contenido, solo enlaza magnets públicos indexados por HackTorrent.cc.
+Solo para fines educativos. Verifica derechos de distribución en tu jurisdicción. Este addon no aloja contenido:
+solo enlaza magnets públicos indexados por HackTorrent.cc y por Knaben (meta-indexer de trackers públicos).
 

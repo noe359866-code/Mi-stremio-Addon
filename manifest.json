@@ -1,8 +1,8 @@
 {
   "id": "com.hacktorrent.addon",
-  "version": "1.0.0",
+  "version": "1.4.0",
   "name": "HackTorrent",
-  "description": "Catálogos y streams de películas, series y anime desde HackTorrent.cc. Provee catálogos de novedades y búsqueda, y streams vía magnets con calidad 4K/1080p/720p en Latino/Dual. Compatible con addons de subtítulos.",
+  "description": "Catálogos y streams de películas, series y anime: HackTorrent.cc (Latino/Dual) y fuentes en inglés (Knaben; The Black Hole Bay opcional). Empareja por título, título original, año, tipo y episodio exacto para evitar torrents equivocados.",
   "logo": "https://i.imgur.com/8N987Z7.png",
   "background": "https://image.tmdb.org/t/p/original//9BBTo63ANSmhC4e6r62OJFuK2GL.jpg",
   "resources": [
@@ -27,7 +27,18 @@
         {
           "name": "genre",
           "isRequired": false,
-          "options": ["Acción","Aventura","Comedia","Drama","Terror","Suspense","Ciencia ficción","Animación","Familia","Crimen"]
+          "options": [
+            "Acción",
+            "Aventura",
+            "Comedia",
+            "Drama",
+            "Terror",
+            "Suspense",
+            "Ciencia ficción",
+            "Animación",
+            "Familia",
+            "Crimen"
+          ]
         },
         {
           "name": "skip",
@@ -49,11 +60,92 @@
           "isRequired": false
         }
       ]
+    },
+    {
+      "type": "series",
+      "id": "hacktorrent-anime",
+      "name": "HackTorrent - Anime",
+      "extra": [
+        {
+          "name": "search",
+          "isRequired": false
+        },
+        {
+          "name": "skip",
+          "isRequired": false
+        }
+      ]
     }
   ],
-  "idPrefixes": ["tt", "ht"],
+  "idPrefixes": [
+    "tt",
+    "ht",
+    "kitsu"
+  ],
   "behaviorHints": {
-    "configurable": false,
+    "configurable": true,
     "configurationRequired": false
-  }
+  },
+  "config": [
+    {
+      "key": "idioma",
+      "type": "select",
+      "title": "Idioma del audio",
+      "default": "ambos",
+      "options": [
+        "ambos",
+        "latino",
+        "ingles"
+      ]
+    },
+    {
+      "key": "fuentes",
+      "type": "select",
+      "title": "Fuentes (ht,knaben,tbb)",
+      "default": "ht,knaben",
+      "options": [
+        "ht",
+        "ht,knaben",
+        "ht,knaben,tbb",
+        "ht,tbb",
+        "knaben",
+        "tbb"
+      ]
+    },
+    {
+      "key": "calidad",
+      "type": "select",
+      "title": "Calidad mínima",
+      "default": "cualquiera",
+      "options": [
+        "cualquiera",
+        "720p",
+        "1080p",
+        "4k"
+      ]
+    },
+    {
+      "key": "orden",
+      "type": "select",
+      "title": "Orden de resultados",
+      "default": "latino",
+      "options": [
+        "latino",
+        "seeders",
+        "calidad"
+      ]
+    },
+    {
+      "key": "max",
+      "type": "number",
+      "title": "Máximo de resultados",
+      "default": "25"
+    },
+    {
+      "key": "packs",
+      "type": "checkbox",
+      "title": "Permitir packs de temporada",
+      "default": "true"
+    }
+  ]
 }
