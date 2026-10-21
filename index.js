@@ -14,6 +14,7 @@ const manifest = require('./manifest.json');
 const Scraper = require('./lib/scraper');
 const HT = require('./lib/hacktorrent');
 const Knaben = require('./lib/knaben');
+const BlackHoleBay = require('./lib/theblackholebay');
 const {
   pickBestMatch,
   rankCandidates,
@@ -157,6 +158,36 @@ function fusionarStreams(propios = [], externos = []) {
     salida.push(stream);
   }
   return salida;
+}
+
+/**
+ * Consulta todas las fuentes externas (inglés) EN PARALELO.
+ * Cualquier fallo individual se ignora: HackTorrent sigue funcionando solo.
+ *
+ * @returns {Promise<Array>} streams ya fusionados y sin duplicados
+ */
+async function buscarEnFuentesExternas({ title, originalTitle, year, type, season, episode }) {
+  if (!title) return [];
+
+  const fuentes = [
+    { nombre: 'Knaben', fn: Knaben.buscarStreams },
+    { nombre: 'BlackHoleBay', fn: BlackHoleBay.buscarStreams }
+  ];
+
+  const resultados = await Promise.allSettled(
+    fuentes.map(({ fn }) => fn({ title, originalTitle, year, type, season, episode }))
+  );
+
+  const streams = [];
+  resultados.forEach((r, i) => {
+    if (r.status === 'fulfilled') {
+      if (Array.isArray(r.value)) streams.push(...r.value);
+    } else {
+      console.warn(`[Stream] ${fuentes[i].nombre} falló:`, r.reason?.message || r.reason);
+    }
+  });
+
+  return fusionarStreams([], streams);
 }
 
 /**
@@ -444,25 +475,22 @@ builder.defineStreamHandler(async ({ type, id }) => {
       const tipoPreferido = esSerie ? 'serie' : 'pelicula';
       const detalle = await Scraper.extraerDetalleTorrent(req.slug, tipoPreferido);
 
-      const knabenHt = Knaben.buscarStreams({
+      const externasHt = buscarEnFuentesExternas({
         title: detalle?.titulo || req.slug.replace(/-/g, ' '),
         originalTitle: detalle?.tituloOriginal || null,
         year: detalle?.año || null,
         type: esSerie ? 'series' : 'movie',
         season,
         episode
-      }).catch(err => {
-        console.warn('[Stream] Knaben falló:', err.message);
-        return [];
       });
 
       if (!detalle || !Array.isArray(detalle.torrents) || detalle.torrents.length === 0) {
-        console.log(`[Stream] Sin torrents para ht:${req.slug} (se usan resultados de Knaben)`);
-        return { streams: fusionarStreams([], await knabenHt) };
+        console.log(`[Stream] Sin torrents para ht:${req.slug} (se usan las fuentes externas)`);
+        return { streams: await externasHt };
       }
 
       const propios = streamsDeDetalle(detalle, { titulo: detalle.titulo, season, episode, esSerie }).streams || [];
-      return { streams: fusionarStreams(propios, await knabenHt) };
+      return { streams: fusionarStreams(propios, await externasHt) };
     }
 
     // --- CASO B: tt (Cinemeta) / kitsu / slug suelto ---
@@ -480,19 +508,16 @@ builder.defineStreamHandler(async ({ type, id }) => {
     const tipoObjetivo = esSerie ? 'series' : 'movie';
     console.log(`[Stream] Objetivo: "${info.title}"${info.originalTitle ? ` / "${info.originalTitle}"` : ''} (${info.year || '?'}) → ${tipoObjetivo}`);
 
-    // Knaben (inglés) se consulta en paralelo: no bloquea ni rompe HackTorrent
-    const knabenPromise = Knaben.buscarStreams({
+    // Fuentes externas (inglés) en paralelo: no bloquean ni rompen HackTorrent
+    const externasPromise = buscarEnFuentesExternas({
       title: info.title,
       originalTitle: info.originalTitle,
       year: info.year,
       type: tipoObjetivo,
       season,
       episode
-    }).catch(err => {
-      console.warn('[Stream] Knaben falló:', err.message);
-      return [];
     });
-    const responder = async (streams) => ({ streams: fusionarStreams(streams, await knabenPromise) });
+    const responder = async (streams) => ({ streams: fusionarStreams(streams, await externasPromise) });
 
     // Buscar candidatos y ordenarlos por relevancia
     let { ranked, lista } = await buscarCandidatos(info, tipoObjetivo);
@@ -527,7 +552,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
     }
 
     if (ranked.length === 0) {
-      console.log(`[Stream] Sin candidatos en HackTorrent para "${info.title}" (${id}); se usan resultados de Knaben`);
+      console.log(`[Stream] Sin candidatos en HackTorrent para "${info.title}" (${id}); se usan las fuentes externas`);
       return responder([]);
     }
 
@@ -614,7 +639,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
       return responder(streamsDeDetalle(detalle, { titulo: detalle.titulo, season, episode, esSerie }).streams || []);
     }
 
-    console.log(`[Stream] Ningún candidato válido para "${info.title}" (${id}); se usan resultados de Knaben`);
+    console.log(`[Stream] Ningún candidato válido para "${info.title}" (${id}); se usan las fuentes externas`);
     return responder([]);
   } catch (err) {
     console.error('[Stream] Error global:', err.message, err.stack?.split('\n')[1] || '');
@@ -760,6 +785,7 @@ module.exports = addonInterface;
 module.exports.builder = builder;
 module.exports._internals = {
   fusionarStreams,
+  buscarEnFuentesExternas,
   parseStremioId,
   variantesDeBusqueda,
   filtrarPorEpisodio,

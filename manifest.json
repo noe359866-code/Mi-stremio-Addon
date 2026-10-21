@@ -1,8 +1,8 @@
 {
   "id": "com.hacktorrent.addon",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "name": "HackTorrent",
-  "description": "Catálogos y streams de películas, series y anime: HackTorrent.cc (Latino/Dual) y Knaben (inglés, meta-indexer con The Pirate Bay, 1337x, RuTracker, Nyaa...). Empareja por título, título original, año, tipo y episodio exacto para evitar torrents equivocados.",
+  "description": "Catálogos y streams de películas, series y anime: HackTorrent.cc (Latino/Dual) y fuentes en inglés (Knaben; The Black Hole Bay opcional). Empareja por título, título original, año, tipo y episodio exacto para evitar torrents equivocados.",
   "logo": "https://i.imgur.com/8N987Z7.png",
   "background": "https://image.tmdb.org/t/p/original//9BBTo63ANSmhC4e6r62OJFuK2GL.jpg",
   "resources": [

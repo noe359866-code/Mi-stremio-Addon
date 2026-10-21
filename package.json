@@ -1,7 +1,7 @@
 {
   "name": "hacktorrent-stremio-addon",
-  "version": "1.2.0",
-  "description": "Stremio Addon - Catálogos y streams desde HackTorrent.cc (Latino) + Knaben (inglés) para películas, series y anime",
+  "version": "1.3.0",
+  "description": "Stremio Addon - Catálogos y streams desde HackTorrent.cc (Latino) + Knaben y The Black Hole Bay (inglés) para películas, series y anime",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",

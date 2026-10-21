@@ -8,8 +8,9 @@ Soporta:
 - 🍥 **Anime** (series) - catálogo de anime + ids `kitsu:`
 - Streams vía **magnet links** con calidad `4K HDR`, `1080p`, `720p`, `DVDRip` y audio `Latino / Castellano / Inglés`
 
-> **v1.2.0** — Además de HackTorrent (Latino), ahora usa **Knaben** como fuente en inglés.
-> Ver [Fuente en inglés: Knaben](#-fuente-en-inglés-knaben-v120) y
+> **v1.3.0** — Tres fuentes: **HackTorrent** (Latino), **Knaben** (inglés, activo) y
+> **The Black Hole Bay** (inglés, opcional y desactivado por defecto).
+> Ver [Fuentes externas](#-fuentes-externas-en-inglés-knaben-y-the-black-hole-bay-v130) y
 > [Corrección de torrents equivocados](#-corrección-de-torrents-equivocados-v110).
 
 ---
@@ -24,7 +25,9 @@ hacktorrent-stremio-addon/
 ├── lib/
 │   ├── hacktorrent.js   # Catálogos (wpreact), Cinemeta, caché
 │   ├── scraper.js       # Búsqueda + detalle (magnet/calidad/temporada/episodio)
-│   ├── knaben.js        # Fuente secundaria en inglés (API pública v2 de Knaben)
+│   ├── knaben.js        # Fuente en inglés: API pública v2 de Knaben
+│   ├── theblackholebay.js # Fuente opcional: API REST de The Black Hole Bay
+│   ├── release.js       # Reglas compartidas de filtrado de releases externos
 │   └── match.js         # Emparejamiento por título/título original/año/tipo
 ├── test/                # Tests con node:test (sin red)
 └── README.md
@@ -203,45 +206,66 @@ npm start
 
 ---
 
-## 🌐 Fuente en inglés: Knaben (v1.2.0)
+## 🌐 Fuentes externas en inglés: Knaben y The Black Hole Bay (v1.3.0)
 
-Además de HackTorrent (Latino/Dual) el addon consulta **Knaben**, un meta-indexer con
-magnet directos de ~30 trackers (The Pirate Bay, 1337x, RuTracker, Nyaa, eztv, …),
-ideal para contenido que en HackTorrent sólo está doblado o no existe.
+Además de HackTorrent (Latino/Dual) el addon consulta indexadores en inglés. Todas las
+fuentes pasan por **las mismas reglas** de `lib/release.js` (título como frase, año, SxxExx),
+así que ninguna puede colar un torrent de otra película o de otro episodio.
 
-- Endpoint usado: `GET https://api.knaben.org/v2/search?q=...&sf=title&o=seeders&d=desc&s=60`
-  ([API v2 de Knaben](https://knaben.org/api/v2/); la v1 está limitada por ancho de banda).
-  No requiere clave. La v2 es de octubre de 2026; si algún día faltara, pon `KNABEN_API=https://api.knaben.org/v1`
-  **no** sirve porque v1 usa POST: en ese caso desactiva Knaben con `KNABEN_ENABLED=0`.
-- Los resultados aparecen con la etiqueta **`Knaben`** y muestran calidad, fuente, tamaño,
-  idioma (VO/Inglés), **seeders** y el **nombre exacto del release**.
-- Los de HackTorrent van primero (suelen ser Latino) y se eliminan duplicados por `infoHash`.
+| Fuente | Estado | API | Aporta |
+| --- | --- | --- | --- |
+| **HackTorrent** | siempre | wpreact + HTML | Latino / Castellano / Dual (primero en la lista) |
+| **Knaben** | activa (`KNABEN_ENABLED=1`) | `GET api.knaben.org/v2/search` | ~30 trackers (TPB, 1337x, RuTracker, Nyaa, eztv…), magnets directos y seeders reales |
+| **The Black Hole Bay** | **desactivada** (`BLACKHOLEBAY_ENABLED=0`) | `GET theblackholebay.lol/api/search` | TPB + 1337x + YTS, su **crawler DHT** y subidas de usuarios |
 
-**Filtrado estricto (misma filosofía que HackTorrent):**
+Los resultados aparecen etiquetados (`Knaben` / `Black Hole Bay`), van **después** de los de
+HackTorrent y se deduplican por `infoHash` entre todas las fuentes.
 
-| Regla | Por qué |
-| --- | --- |
-| Sólo categorías de vídeo (`Movies`, `TV`, `Anime`) | descarta audio, libros, juegos, software y adultos |
-| El título debe aparecer como **frase** en el nombre del release | evita `The Bad Guys Breaking In S02E05` al buscar `Breaking Bad` |
-| Películas: año del release dentro de **±1** | evita secuelas/remakes (`The Avengers` 2012 ≠ 2015/2018) |
-| Series: **SxxExx exacto**; si no hay, sólo **packs de esa temporada** | nunca otro capítulo |
-| Sin `magnetUrl` ni `hash` → se descarta | evita resultados sin descarga posible |
-| Espaciado entre peticiones + caché 10 min + cooldown si hay HTTP 429 | respeta el rate limit de Knaben |
+### The Black Hole Bay (opcional)
 
-**Variables de entorno:**
+```bash
+BLACKHOLEBAY_ENABLED=1   # activarla
+```
+
+Detalles verificados de su API ([docs](https://theblackholebay.lol/api)):
+
+- `GET /api/search?q=...&category=200` — sin autenticación; 120 peticiones/minuto/IP.
+  `category` es numérica: **200 = vídeo** (por eso siempre se pide 200 y se acepta 200-299;
+  los resultados vienen con subcódigo 207/208).
+- Devuelve `name`, `info_hash`, `magnet`, `seeders`, `leechers`, `size`, `sizeLabel`,
+  `source` (TPB, 1337x, YTS, DHT, User_Upload). No hay `year` ni temporada: el filtrado
+  se hace sobre el nombre del release.
+- **Por qué está desactivada por defecto:**
+  1. **Se solapa mucho con Knaben**: los mismos torrents de TPB con el mismo `infoHash`
+     (YIFY/GalaxyRG, etc.). Añadiría poco y multiplicaría las peticiones.
+  2. Su portada muestra *“LIVE API UNAVAILABLE – SERVING FROM LOCAL INDEX”* cuando el índice
+     remoto falla; en ese modo responde desde un índice local pequeño y más antiguo.
+  3. En series devuelve sobre todo **packs de temporada**; los episodios sueltos escasean
+     (con el filtro estricto eso significa “sin resultados” más a menudo).
+  4. La respuesta es **muy pesada** (magnets con decenas de trackers): se limita a
+     `BLACKHOLEBAY_MAX_BYTES` (8 MB) para no consumir memoria.
+- Lo que sí aporta: magnets descubiertos por **DHT** y subidas de usuarios que no aparecen
+  en Knaben, y una alternativa si Knaben te limita por IP.
+
+### Variables de entorno de las fuentes externas
 
 | Variable | Por defecto | Descripción |
 | --- | --- | --- |
-| `KNABEN_ENABLED` | `1` | `0` desactiva la fuente por completo |
+| `KNABEN_ENABLED` | `1` | `0` desactiva Knaben |
 | `KNABEN_API` | `https://api.knaben.org/v2` | base de la API |
-| `KNABEN_LIMIT` | `15` | máximo de streams devueltos por consulta |
+| `KNABEN_LIMIT` | `15` | máximo de streams de Knaben por consulta |
 | `KNABEN_PAGE_SIZE` | `60` | resultados pedidos a la API (máx. 150) |
 | `KNABEN_TIMEOUT` | `9000` | timeout en ms |
 | `KNABEN_MIN_INTERVAL_MS` | `400` | espaciado mínimo entre peticiones |
+| `BLACKHOLEBAY_ENABLED` | `0` | `1` activa The Black Hole Bay |
+| `BLACKHOLEBAY_API` | `https://theblackholebay.lol/api` | base de la API |
+| `BLACKHOLEBAY_LIMIT` | `10` | máximo de streams de esta fuente |
+| `BLACKHOLEBAY_TIMEOUT` | `9000` | timeout en ms |
+| `BLACKHOLEBAY_MAX_BYTES` | `8388608` | tamaño máximo de respuesta |
+| `BLACKHOLEBAY_MIN_INTERVAL_MS` | `300` | espaciado mínimo entre peticiones |
 
-> Knaben es contenido **en inglés (VO)**: si un título no tiene versión latina en HackTorrent,
-> verás los releases ingleses; los subtítulos se resuelven con un addon de subtítulos
-> (OpenSubtitles). Los streams de HackTorrent siguen apareciendo primero cuando existen.
+> Las fuentes externas son contenido **en inglés (VO)**: se resuelven subtítulos con un addon
+> tipo OpenSubtitles. Si un título está en Latino, HackTorrent aparece siempre primero.
 
 ---
 
@@ -300,6 +324,8 @@ y que un título parecido de otro año devuelva vacío en vez de contenido ajeno
 | No aparecen streams nuevos de `Knaben` | el hosting debe permitir salir a `api.knaben.org`; prueba `curl "https://api.knaben.org/v2/search?q=test&s=1"` |
 | Sólo veo resultados en inglés | HackTorrent no tiene ese título en Latino; prueba `KNABEN_LIMIT=25` para ver más opciones |
 | Quiero desactivar Knaben | `KNABEN_ENABLED=0` |
+| Quiero activar The Black Hole Bay | `BLACKHOLEBAY_ENABLED=1` |
+| TBB no devuelve episodios sueltos | normal: su índice tiene sobre todo packs; usa Knaben para episodios |
 | Muchos `429` en logs | sube `KNABEN_MIN_INTERVAL_MS` (p. ej. `1000`) |
 | Sigo viendo un título equivocado | revisa el **nombre del release** en el stream: si no coincide, manda el `id` (tt…/kitsu…) y temporada/episodio |
 
