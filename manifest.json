@@ -83,7 +83,69 @@
     "kitsu"
   ],
   "behaviorHints": {
-    "configurable": false,
+    "configurable": true,
     "configurationRequired": false
-  }
+  },
+  "config": [
+    {
+      "key": "idioma",
+      "type": "select",
+      "title": "Idioma del audio",
+      "default": "ambos",
+      "options": [
+        "ambos",
+        "latino",
+        "ingles"
+      ]
+    },
+    {
+      "key": "fuentes",
+      "type": "select",
+      "title": "Fuentes (ht,knaben,tbb)",
+      "default": "ht,knaben",
+      "options": [
+        "ht",
+        "ht,knaben",
+        "ht,knaben,tbb",
+        "ht,tbb",
+        "knaben",
+        "tbb"
+      ]
+    },
+    {
+      "key": "calidad",
+      "type": "select",
+      "title": "Calidad mínima",
+      "default": "cualquiera",
+      "options": [
+        "cualquiera",
+        "720p",
+        "1080p",
+        "4k"
+      ]
+    },
+    {
+      "key": "orden",
+      "type": "select",
+      "title": "Orden de resultados",
+      "default": "latino",
+      "options": [
+        "latino",
+        "seeders",
+        "calidad"
+      ]
+    },
+    {
+      "key": "max",
+      "type": "number",
+      "title": "Máximo de resultados",
+      "default": "25"
+    },
+    {
+      "key": "packs",
+      "type": "checkbox",
+      "title": "Permitir packs de temporada",
+      "default": "true"
+    }
+  ]
 }

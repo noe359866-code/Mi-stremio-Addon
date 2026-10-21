@@ -175,7 +175,8 @@ test('fusiona las tres fuentes sin duplicar el mismo infoHash', async () => {
   TBB._limpiarCache();
 
   const streams = await buscarEnFuentesExternas({
-    title: 'The Avengers', year: '2012', type: 'movie'
+    title: 'The Avengers', year: '2012', type: 'movie',
+    config: { fuentes: 'ht,knaben,tbb' }
   });
 
   const hashes = streams.map(s => s.infoHash);

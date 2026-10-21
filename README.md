@@ -8,10 +8,9 @@ Soporta:
 - 🍥 **Anime** (series) - catálogo de anime + ids `kitsu:`
 - Streams vía **magnet links** con calidad `4K HDR`, `1080p`, `720p`, `DVDRip` y audio `Latino / Castellano / Inglés`
 
-> **v1.3.0** — Tres fuentes: **HackTorrent** (Latino), **Knaben** (inglés, activo) y
-> **The Black Hole Bay** (inglés, opcional y desactivado por defecto).
-> Ver [Fuentes externas](#-fuentes-externas-en-inglés-knaben-y-the-black-hole-bay-v130) y
-> [Corrección de torrents equivocados](#-corrección-de-torrents-equivocados-v110).
+> **v1.4.0** — Página web de **configuración** (`/configure`): idioma, fuentes, calidad,
+> orden, packs y máximo de resultados. Ver [Configuración web](#-configuración-web-configure-v140).
+> Fuentes: **HackTorrent** (Latino), **Knaben** y **The Black Hole Bay** (opcional).
 
 ---
 
@@ -28,6 +27,9 @@ hacktorrent-stremio-addon/
 │   ├── knaben.js        # Fuente en inglés: API pública v2 de Knaben
 │   ├── theblackholebay.js # Fuente opcional: API REST de The Black Hole Bay
 │   ├── release.js       # Reglas compartidas de filtrado de releases externos
+│   ├── config.js        # Configuración válida + filtros/orden de los streams
+│   ├── configPage.js    # Página HTML de /configure (sin dependencias)
+│   ├── server.js        # Express: /configure, /health y el router del SDK
 │   └── match.js         # Emparejamiento por título/título original/año/tipo
 ├── test/                # Tests con node:test (sin red)
 └── README.md
@@ -206,6 +208,49 @@ npm start
 
 ---
 
+## ⚙️ Configuración web (/configure) (v1.4.0)
+
+La configuración vive **en la propia URL** del addon (protocolo de configuración de Stremio),
+así que no hace falta base de datos ni cuenta: cada URL = una configuración.
+
+```
+https://tu-addon.com/configure        ← página con el formulario
+https://tu-addon.com/{configJSON}/manifest.json   ← addon ya configurado
+```
+
+La página (`/`) redirige a `/configure` y muestra:
+
+| Opción | Valores | Efecto |
+| --- | --- | --- |
+| **Idioma del audio** | `ambos` · `latino` · `ingles` | filtra los streams por idioma (`Latino/Inglés` o `Dual` cuentan para ambos) |
+| **Fuentes** | `ht` (HackTorrent) · `knaben` · `tbb` (Black Hole Bay) | desactiva las que no quieras; las consultas se hacen sólo a las activas |
+| **Calidad mínima** | `cualquiera` · `720p` · `1080p` · `4k` | descarta calidad inferior |
+| **Orden** | `latino` · `seeders` · `calidad` | orden de la lista de streams |
+| **Máximo de resultados** | 10 / 20 / 25 / 40 / 60 | evita listas eternas |
+| **Packs de temporada** | sí / no | si se desactivan, nunca se ofrece un pack en lugar del episodio |
+
+Detalles de implementación:
+
+- `lib/config.js` normaliza cualquier entrada (JSON, query string, alias como `language`/`sources`)
+  y valida rangos: `max` se acota a 5–60 y las fuentes desconocidas se ignoran.
+- Cada stream viaja internamente con un `_meta` (fuente, idioma, calidad, seeders, pack) que se
+  usa para filtrar/ordenar y **se elimina antes de responder** a Stremio.
+- Si el filtro de idioma o de calidad deja la lista vacía, se muestran todos los resultados
+  (mejor VO que nada). Con los **packs** no hay excepción: si los desactivas, no aparecen.
+- `/health` devuelve `{ ok, name, version }` para Render/UptimeRobot.
+- Ejemplos de URL:
+
+```text
+/configure?idioma=latino&fuentes=ht
+/configure?idioma=ingles&fuentes=knaben,tbb&calidad=1080p&orden=seeders&max=40
+```
+
+> El manifest declara `config` + `behaviorHints.configurable: true`, así que Stremio muestra el
+> botón **Configure**. Al cambiar opciones hay que **reinstalar** con la nueva URL (Stremio
+> guarda la URL completa, configuración incluida).
+
+---
+
 ## 🌐 Fuentes externas en inglés: Knaben y The Black Hole Bay (v1.3.0)
 
 Además de HackTorrent (Latino/Dual) el addon consulta indexadores en inglés. Todas las
@@ -325,6 +370,8 @@ y que un título parecido de otro año devuelva vacío en vez de contenido ajeno
 | Sólo veo resultados en inglés | HackTorrent no tiene ese título en Latino; prueba `KNABEN_LIMIT=25` para ver más opciones |
 | Quiero desactivar Knaben | `KNABEN_ENABLED=0` |
 | Quiero activar The Black Hole Bay | `BLACKHOLEBAY_ENABLED=1` |
+| Cambié opciones y no se aplican | reinstala el addon con la nueva URL de `/configure` (la config va en la URL) |
+| La página `/configure` no carga | el servidor debe escuchar en `0.0.0.0` (ya es el comportamiento por defecto) y permitir el dominio del proxy |
 | TBB no devuelve episodios sueltos | normal: su índice tiene sobre todo packs; usa Knaben para episodios |
 | Muchos `429` en logs | sube `KNABEN_MIN_INTERVAL_MS` (p. ej. `1000`) |
 | Sigo viendo un título equivocado | revisa el **nombre del release** en el stream: si no coincide, manda el `id` (tt…/kitsu…) y temporada/episodio |

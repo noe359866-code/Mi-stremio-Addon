@@ -8,13 +8,14 @@
 'use strict';
 
 const axios = require('axios');
-const { addonBuilder, serveHTTP } = require('stremio-addon-sdk');
+const { addonBuilder } = require('stremio-addon-sdk');
 const manifest = require('./manifest.json');
 
 const Scraper = require('./lib/scraper');
 const HT = require('./lib/hacktorrent');
 const Knaben = require('./lib/knaben');
 const BlackHoleBay = require('./lib/theblackholebay');
+const { normalizarConfig, aplicarConfig, fuentesActivas } = require('./lib/config');
 const {
   pickBestMatch,
   rankCandidates,
@@ -136,6 +137,14 @@ function torrentToStream(torrent, tituloFallback, extra = {}) {
       bingeGroup: `hacktorrent-${String(calidad).replace(/\s+/g, '-').toLowerCase()}`,
       videoHash: infoHash ? `${infoHash}:${calidad}` : undefined,
       filename: dn || undefined
+    },
+    // Metadatos internos para lib/config.js (se eliminan antes de responder)
+    _meta: {
+      fuente: 'hacktorrent',
+      idioma,
+      calidad,
+      seeders: 0,
+      pack: esPack === true
     }
   };
   if (infoHash) stream.infoHash = infoHash;
@@ -166,13 +175,16 @@ function fusionarStreams(propios = [], externos = []) {
  *
  * @returns {Promise<Array>} streams ya fusionados y sin duplicados
  */
-async function buscarEnFuentesExternas({ title, originalTitle, year, type, season, episode }) {
+async function buscarEnFuentesExternas({ title, originalTitle, year, type, season, episode, config }) {
   if (!title) return [];
 
+  const activas = fuentesActivas(config);
   const fuentes = [
-    { nombre: 'Knaben', fn: Knaben.buscarStreams },
-    { nombre: 'BlackHoleBay', fn: BlackHoleBay.buscarStreams }
-  ];
+    { clave: 'knaben', nombre: 'Knaben', fn: Knaben.buscarStreams },
+    { clave: 'tbb', nombre: 'BlackHoleBay', fn: BlackHoleBay.buscarStreams }
+  ].filter(f => activas.has(f.clave));
+
+  if (fuentes.length === 0) return [];
 
   const resultados = await Promise.allSettled(
     fuentes.map(({ fn }) => fn({ title, originalTitle, year, type, season, episode }))
@@ -457,10 +469,17 @@ builder.defineCatalogHandler(async ({ type, id, extra }) => {
 // ---------------------------------------------------------------------------
 // 2) STREAMS
 // ---------------------------------------------------------------------------
-builder.defineStreamHandler(async ({ type, id }) => {
+builder.defineStreamHandler(async ({ type, id, config }) => {
   try {
-    console.log(`[Stream] Solicitado type=${type} id=${id}`);
+    const cfg = normalizarConfig(config);
+    const activas = fuentesActivas(cfg);
+    const usarHackTorrent = activas.has('ht');
+
+    console.log(`[Stream] Solicitado type=${type} id=${id} cfg=${JSON.stringify(cfg)}`);
     if (!id) return { streams: [] };
+
+    // Envuelve cualquier respuesta aplicando la configuración del usuario
+    const responder = (streams) => ({ streams: aplicarConfig(streams || [], cfg) });
 
     const req = parseStremioId(id);
     const esSerie = type === 'series';
@@ -473,7 +492,9 @@ builder.defineStreamHandler(async ({ type, id }) => {
     // --- CASO A: id propio ht:slug → el slug ya identifica el contenido ---
     if (req.fuente === 'ht' && req.slug) {
       const tipoPreferido = esSerie ? 'serie' : 'pelicula';
-      const detalle = await Scraper.extraerDetalleTorrent(req.slug, tipoPreferido);
+      const detalle = usarHackTorrent
+        ? await Scraper.extraerDetalleTorrent(req.slug, tipoPreferido)
+        : null;
 
       const externasHt = buscarEnFuentesExternas({
         title: detalle?.titulo || req.slug.replace(/-/g, ' '),
@@ -481,16 +502,17 @@ builder.defineStreamHandler(async ({ type, id }) => {
         year: detalle?.año || null,
         type: esSerie ? 'series' : 'movie',
         season,
-        episode
+        episode,
+        config: cfg
       });
 
       if (!detalle || !Array.isArray(detalle.torrents) || detalle.torrents.length === 0) {
         console.log(`[Stream] Sin torrents para ht:${req.slug} (se usan las fuentes externas)`);
-        return { streams: await externasHt };
+        return responder(await externasHt);
       }
 
       const propios = streamsDeDetalle(detalle, { titulo: detalle.titulo, season, episode, esSerie }).streams || [];
-      return { streams: fusionarStreams(propios, await externasHt) };
+      return responder(fusionarStreams(propios, await externasHt));
     }
 
     // --- CASO B: tt (Cinemeta) / kitsu / slug suelto ---
@@ -515,12 +537,19 @@ builder.defineStreamHandler(async ({ type, id }) => {
       year: info.year,
       type: tipoObjetivo,
       season,
-      episode
+      episode,
+      config: cfg
     });
-    const responder = async (streams) => ({ streams: fusionarStreams(streams, await externasPromise) });
+    const responderConExternas = async (streams) => responder(fusionarStreams(streams, await externasPromise));
 
-    // Buscar candidatos y ordenarlos por relevancia
-    let { ranked, lista } = await buscarCandidatos(info, tipoObjetivo);
+    // Buscar candidatos y ordenarlos por relevancia (si HackTorrent está activo)
+    let ranked = [];
+    let lista = [];
+    if (usarHackTorrent) {
+      ({ ranked, lista } = await buscarCandidatos(info, tipoObjetivo));
+    } else {
+      console.log('[Stream] HackTorrent desactivado en la configuración; sólo fuentes externas');
+    }
     let soloPeliculaAnime = false;
 
     if (ranked.length === 0 && info.title) {
@@ -553,7 +582,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
 
     if (ranked.length === 0) {
       console.log(`[Stream] Sin candidatos en HackTorrent para "${info.title}" (${id}); se usan las fuentes externas`);
-      return responder([]);
+      return responderConExternas([]);
     }
 
     // Sólo candidatos con puntuación suficiente (arriba del umbral del matcher)
@@ -621,14 +650,14 @@ builder.defineStreamHandler(async ({ type, id }) => {
         }
         if (exactos.length === 0) {
           console.log(`[Stream] ${cand.slug}: sin episodio exacto, usando ${packs.length} pack(s) de T${season}`);
-          return responder(
+          return responderConExternas(
             packs
               .map(t => torrentToStream(t, detalle.titulo, { titulo: detalle.titulo, season, episode: null, esPack: true }))
               .filter(Boolean)
           );
         }
         console.log(`[Stream] ${cand.slug} → ${exactos.length} torrent(s) para S${season}E${episode}`);
-        return responder(
+        return responderConExternas(
           exactos
             .map(t => torrentToStream(t, detalle.titulo, { titulo: detalle.titulo, season, episode }))
             .filter(Boolean)
@@ -636,11 +665,11 @@ builder.defineStreamHandler(async ({ type, id }) => {
       }
 
       console.log(`[Stream] ${cand.slug} → ${detalle.torrents.length} torrent(s)`);
-      return responder(streamsDeDetalle(detalle, { titulo: detalle.titulo, season, episode, esSerie }).streams || []);
+      return responderConExternas(streamsDeDetalle(detalle, { titulo: detalle.titulo, season, episode, esSerie }).streams || []);
     }
 
     console.log(`[Stream] Ningún candidato válido para "${info.title}" (${id}); se usan las fuentes externas`);
-    return responder([]);
+    return responderConExternas([]);
   } catch (err) {
     console.error('[Stream] Error global:', err.message, err.stack?.split('\n')[1] || '');
     return { streams: [] };
@@ -766,25 +795,35 @@ builder.defineMetaHandler(async ({ type, id }) => {
 });
 
 // ---------------------------------------------------------------------------
-// 4) SERVIDOR
+// 4) SERVIDOR (con página de configuración web en /configure)
 // ---------------------------------------------------------------------------
 const addonInterface = builder.getInterface();
 
 if (require.main === module) {
+  const { createApp } = require('./lib/server');
   const port = process.env.PORT || 7000;
-  serveHTTP(addonInterface, {
-    port: port,
-    cacheMaxAge: 3600 * 6
+  const app = createApp(addonInterface);
+
+  // 0.0.0.0 para funcionar detrás de proxies (Render, Docker, previews)
+  const server = app.listen(port, '0.0.0.0', () => {
+    console.log(`🚀 HackTorrent Addon corriendo en el puerto ${port}`);
+    console.log(`   Configuración: /configure`);
+    console.log(`   Manifest:      /manifest.json`);
+    console.log(`   Catálogos:     ${manifest.catalogs.map(c => c.name).join(', ')}`);
+    console.log(`   Fuentes:       HackTorrent (Latino) + Knaben${BlackHoleBay.BLACKHOLEBAY_ENABLED ? ' + Black Hole Bay' : ' (Black Hole Bay opcional)'}`);
   });
-  console.log(`🚀 HackTorrent Addon corriendo en http://localhost:${port}/manifest.json`);
-  console.log(`   Catálogos: ${manifest.catalogs.map(c => c.name).join(', ')}`);
-  console.log(`   Puerto: ${port} (env PORT=${process.env.PORT || 'no definido -> 7000'})`);
+
+  const apagar = () => server.close(() => process.exit(0));
+  process.on('SIGTERM', apagar);
+  process.on('SIGINT', apagar);
 }
 
 module.exports = addonInterface;
 module.exports.builder = builder;
 module.exports._internals = {
   fusionarStreams,
+  normalizarConfig,
+  aplicarConfig,
   buscarEnFuentesExternas,
   parseStremioId,
   variantesDeBusqueda,

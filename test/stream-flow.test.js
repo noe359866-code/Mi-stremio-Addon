@@ -291,3 +291,47 @@ test('búsqueda de catálogo filtra por tipo (películas no traen series)', asyn
   assert.ok(metas.every(m => m.type === 'movie'));
   assert.ok(!metas.some(m => (m.name || '').includes('1961')));
 });
+
+// ------------------- configuración del usuario (página web) -------------------
+test('config idioma=latino: Knaben (inglés) no aparece', async () => {
+  const { streams } = await addon.get('stream', 'movie', 'tt0848228', {}, { idioma: 'latino' });
+  assert.ok(streams.length >= 1);
+  assert.ok(streams.every(s => s.name.startsWith('HackTorrent')), 'sólo HackTorrent (Latino)');
+});
+
+test('config idioma=ingles: no se ofrecen los Latino-only', async () => {
+  const { streams } = await addon.get('stream', 'movie', 'tt0848228', {}, { idioma: 'ingles' });
+  assert.ok(streams.length >= 1);
+  assert.ok(streams.every(s => s.name.startsWith('Knaben')), 'sólo la fuente inglesa');
+});
+
+test('config fuentes=ht: no se consulta Knaben', async () => {
+  const { streams } = await addon.get('stream', 'series', 'tt0903747:2:5', {}, { fuentes: 'ht' });
+  const hs = hashes(streams);
+  assert.ok(hs.includes(H.bb0205));
+  assert.ok(!hs.includes('2'.repeat(40)), 'no debe haber resultado de Knaben');
+});
+
+test('config calidad=1080p: fuera el 720p y el HDTV', async () => {
+  const { streams } = await addon.get('stream', 'series', 'tt0903747:2:5', {}, { fuentes: 'ht,knaben', calidad: '1080p' });
+  assert.ok(streams.length >= 1);
+  assert.ok(streams.every(s => /1080|2160|4k/i.test(s.name + ' ' + s.title)));
+});
+
+test('config max=10: no devuelve más de 10 streams', async () => {
+  const { streams } = await addon.get('stream', 'movie', 'tt0848228', {}, { fuentes: 'ht,knaben,tbb', max: 10 });
+  assert.ok(streams.length <= 10);
+});
+
+test('config packs=false: en un pack de temporada no devuelve nada', async () => {
+  const conPacks = await addon.get('stream', 'series', 'ht:pack-show:2:5', {}, { fuentes: 'ht' });
+  assert.strictEqual(conPacks.streams.length, 1);
+
+  const sinPacks = await addon.get('stream', 'series', 'ht:pack-show:2:5', {}, { fuentes: 'ht', packs: false });
+  assert.deepStrictEqual(sinPacks.streams, []);
+});
+
+test('la respuesta nunca incluye metadatos internos', async () => {
+  const { streams } = await addon.get('stream', 'movie', 'tt0848228', {}, { fuentes: 'ht,knaben' });
+  for (const s of streams) assert.strictEqual(s._meta, undefined);
+});
