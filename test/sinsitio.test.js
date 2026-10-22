@@ -313,12 +313,12 @@ test('UniverTorrent, SinSitio y Beamup: manifest sin nombres de proveedores, con
   // 1) Configuración acepta ss / sinsitio y alias Español / Inglés
   assert.deepEqual([...fuentesActivas({ fuentes: 'ss' })], ['ss']);
   assert.deepEqual([...fuentesActivas({ fuentes: 'sinsitio,pelispanda' })], ['pp', 'ss']);
-  assert.deepEqual([...fuentesActivas({ fuentes: 'espanol' })], ['ht', 'pp', 'ss']);
+  assert.deepEqual([...fuentesActivas({ fuentes: 'espanol' })], ['ht', 'pp', 'ss', 'dt', 'mt', 'wt']);
   assert.deepEqual([...fuentesActivas({ fuentes: 'ingles' })], ['knaben', 'tcsv']);
 
   const cfgEs = normalizarConfig('es');
   assert.equal(cfgEs.idioma, 'latino');
-  assert.equal(cfgEs.fuentes, 'ht,pp,ss');
+  assert.equal(cfgEs.fuentes, 'ht,pp,ss,dt,mt,wt');
 
   const cfgEn = normalizarConfig('en');
   assert.equal(cfgEn.idioma, 'ingles');
@@ -345,7 +345,7 @@ test('UniverTorrent, SinSitio y Beamup: manifest sin nombres de proveedores, con
   assert.deepEqual(manifest.idPrefixes, ['tt', 'kitsu']);
   assert.equal(manifest.behaviorHints.p2p, true);
   const rawManifestText = JSON.stringify(manifest).toLowerCase();
-  for (const proveedor of ['hacktorrent', 'pelispanda', 'sinsitio', 'knaben', 'torrents.csv', 'blackholebay', 'black hole bay']) {
+  for (const proveedor of ['hacktorrent', 'pelispanda', 'sinsitio', 'divxtotal', 'mejortorrent', 'wolftorrent', 'wolfmax4k', 'knaben', 'torrents.csv', 'blackholebay', 'black hole bay']) {
     assert.ok(!rawManifestText.includes(proveedor), `manifest.json no debe mostrar el proveedor "${proveedor}"`);
   }
 
@@ -358,6 +358,9 @@ test('UniverTorrent, SinSitio y Beamup: manifest sin nombres de proveedores, con
   const html = renderConfigPage({ config: {}, manifest });
   assert.ok(html.includes('UniverTorrent'));
   assert.ok(html.includes('name="fuente" value="ss"'));
+  assert.ok(html.includes('name="fuente" value="dt"'));
+  assert.ok(html.includes('name="fuente" value="mt"'));
+  assert.ok(html.includes('name="fuente" value="wt"'));
   assert.ok(!html.includes('baby-beamup.club'), '/configure no debe anunciar un subdominio baby-beamup.club inexistente');
   assert.ok(html.includes('data-ui="es"'));
   assert.ok(html.includes('data-ui="en"'));
@@ -366,7 +369,7 @@ test('UniverTorrent, SinSitio y Beamup: manifest sin nombres de proveedores, con
     .replace(/<style[\s\S]*?<\/style>/gi, ' ')
     .replace(/<[^>]+>/g, ' ')
     .toLowerCase();
-  for (const proveedor of ['hacktorrent', 'pelispanda', 'sinsitio', 'knaben', 'torrents.csv', 'blackholebay', 'black hole bay']) {
+  for (const proveedor of ['hacktorrent', 'pelispanda', 'sinsitio', 'divxtotal', 'mejortorrent', 'wolftorrent', 'wolfmax4k', 'knaben', 'torrents.csv', 'blackholebay', 'black hole bay']) {
     assert.ok(!visibleText.includes(proveedor), `/configure no debe mostrar el nombre del proveedor "${proveedor}"`);
   }
 });
