@@ -13,10 +13,12 @@ const manifest = require('./manifest.json');
 
 const Scraper = require('./lib/scraper');
 const HT = require('./lib/hacktorrent');
+const PelisPanda = require('./lib/pelispanda');
+const SinSitio = require('./lib/sinsitio');
 const Knaben = require('./lib/knaben');
 const BlackHoleBay = require('./lib/theblackholebay');
 const TorrentsCsv = require('./lib/torrentsCsv');
-const { normalizarConfig, aplicarConfig, fuentesActivas } = require('./lib/config');
+const { DEFAULTS, BEAMUP_HOST, BEAMUP_ORIGIN, normalizarConfig, aplicarConfig, fuentesActivas } = require('./lib/config');
 const { timeout } = require('./lib/timeouts');
 const {
   pickBestMatch,
@@ -46,11 +48,12 @@ function metaCacheSet(key, value, ttl = 6 * 60 * 60 * 1000) {
 // ---------------------------------------------------------------------------
 
 /**
- * Convierte un item de HackTorrent (wpreact) a Stremio Meta Preview
+ * Convierte un item de HackTorrent o PelisPanda (wpreact) a Stremio Meta Preview
  */
-function toMetaPreview(item, stremioType) {
+function toMetaPreview(item, stremioType, prefijo) {
   if (!item || !item.slug) return null;
 
+  const idPrefix = prefijo || (item.fuente === 'pelispanda' ? 'pp' : item.fuente === 'sinsitio' ? 'ss' : 'ht');
   const tipoItem = item.tipo || item.type || null;
   let type = stremioType;
   if (!type) {
@@ -62,19 +65,24 @@ function toMetaPreview(item, stremioType) {
   const slug = item.slug;
   let poster = item.poster || item.featured || item.image || null;
   if (poster && poster.startsWith('/')) poster = `https://image.tmdb.org/t/p/w500${poster}`;
+  if (poster && /^https?:\/\/image\.tmdb\.org\/t\/p\/(w\d+|original)\/?$/i.test(poster)) poster = null;
   let background = item.background || item.background_image || item.backdrop || poster;
   if (background && background.startsWith('/')) background = `https://image.tmdb.org/t/p/original${background}`;
+  if (background && /^https?:\/\/image\.tmdb\.org\/t\/p\/(w\d+|original)\/?$/i.test(background)) background = poster || null;
 
   const titulo = item.titulo || item.title || slug.replace(/-/g, ' ');
   const año = item.año || item.year || item.years || null;
   const añoStr = año ? String(año).slice(0, 4) : '';
-  const descripcion = item.descripcion || item.overview || '';
-  const generos = item.generos || item.genres
-    ? String(item.generos || item.genres).split(',').map(g => g.trim()).filter(Boolean)
-    : [];
+  const descripcion = item.sinopsis || item.descripcion || item.overview || '';
+  const rawGen = item.generos?.length ? item.generos : item.genres;
+  const generos = Array.isArray(rawGen)
+    ? rawGen.map(g => (typeof g === 'string' ? g.trim() : String(g?.name || '').trim())).filter(Boolean)
+    : rawGen
+      ? String(rawGen).split(',').map(g => g.trim()).filter(Boolean)
+      : [];
 
   return {
-    id: `ht:${slug}`,
+    id: `${idPrefix}:${slug}`,
     type,
     name: titulo,
     poster: poster || undefined,
@@ -83,7 +91,7 @@ function toMetaPreview(item, stremioType) {
     logo: poster || undefined,
     description: descripcion || undefined,
     releaseInfo: añoStr || undefined,
-    imdbRating: item.imdbRating || item.imdb || null,
+    imdbRating: item.imdbRating || (item.imdb && item.imdb !== '0' ? item.imdb : null),
     genres: generos.length ? generos : undefined
   };
 }
@@ -94,8 +102,9 @@ function toMetaPreview(item, stremioType) {
  * que el torrent corresponde a lo que pidió.
  */
 function torrentToStream(torrent, tituloFallback, extra = {}) {
-  const magnet = torrent.magnet || torrent.torrentUrl;
-  if (!magnet) return null;
+  const rawMagnet = torrent.magnet || torrent.torrentUrl;
+  if (!rawMagnet) return null;
+  const magnet = Scraper.normalizarMagnet(rawMagnet) || rawMagnet;
 
   const calidad = torrent.calidad || torrent.calidadNormalizada || 'Desconocido';
   const tamaño = torrent.tamaño || torrent.size || '';
@@ -104,8 +113,13 @@ function torrentToStream(torrent, tituloFallback, extra = {}) {
 
   let infoHash = torrent.infoHash || null;
   if (!infoHash && magnet.startsWith('magnet:')) {
-    const m = magnet.match(/btih:([a-fA-F0-9]{32,40})/i);
-    if (m) infoHash = m[1].toLowerCase();
+    const m = magnet.match(/btih:([a-fA-F0-9]{40}|[a-zA-Z2-7]{32}|[a-fA-F0-9]{32})/i);
+    if (m) {
+      const raw = m[1];
+      infoHash = (raw.length === 32 && /^[A-Z2-7]{32}$/i.test(raw) && !/^[0-9a-f]{32}$/i.test(raw))
+        ? (Scraper.base32ToHex(raw) || raw.toLowerCase())
+        : raw.toLowerCase();
+    }
   }
 
   let dn = torrent.dn || null;
@@ -172,25 +186,30 @@ function fusionarStreams(propios = [], externos = []) {
 }
 
 /**
- * Consulta todas las fuentes externas (inglés) EN PARALELO.
+ * Consulta todas las fuentes adicionales (PelisPanda en Latino + fuentes en inglés) EN PARALELO.
  * Cualquier fallo individual se ignora: HackTorrent sigue funcionando solo.
  *
  * @returns {Promise<Array>} streams ya fusionados y sin duplicados
  */
-async function buscarEnFuentesExternas({ title, originalTitle, year, type, season, episode, config }) {
+async function buscarEnFuentesExternas({ title, originalTitle, altTitles, tmdbId, year, type, season, episode, config }) {
   if (!title) return [];
 
-  const activas = fuentesActivas(config);
+  const cfg = normalizarConfig(config);
+  const activas = fuentesActivas(cfg);
+  const permitirHispanasPorDefecto = cfg.fuentes === DEFAULTS.fuentes;
+
   const fuentes = [
-    { clave: 'knaben', nombre: 'Knaben', fn: Knaben.buscarStreams },
-    { clave: 'tbb', nombre: 'BlackHoleBay', fn: BlackHoleBay.buscarStreams },
-    { clave: 'tcsv', nombre: 'Torrents.csv', fn: TorrentsCsv.buscarStreams }
-  ].filter(f => activas.has(f.clave));
+    { clave: 'pp', nombre: 'PelisPanda', fn: PelisPanda.buscarStreams, activa: activas.has('pp') || permitirHispanasPorDefecto },
+    { clave: 'ss', nombre: 'SinSitio', fn: SinSitio.buscarStreams, activa: activas.has('ss') || permitirHispanasPorDefecto },
+    { clave: 'knaben', nombre: 'Knaben', fn: Knaben.buscarStreams, activa: activas.has('knaben') },
+    { clave: 'tbb', nombre: 'BlackHoleBay', fn: BlackHoleBay.buscarStreams, activa: activas.has('tbb') },
+    { clave: 'tcsv', nombre: 'Torrents.csv', fn: TorrentsCsv.buscarStreams, activa: activas.has('tcsv') }
+  ].filter(f => f.activa);
 
   if (fuentes.length === 0) return [];
 
   const resultados = await Promise.allSettled(
-    fuentes.map(({ fn }) => fn({ title, originalTitle, year, type, season, episode }))
+    fuentes.map(({ fn }) => fn({ title, originalTitle, altTitles, tmdbId, year, type, season, episode }))
   );
 
   const streams = [];
@@ -207,7 +226,7 @@ async function buscarEnFuentesExternas({ title, originalTitle, year, type, seaso
 
 /**
  * Parsea el id de Stremio:
- *   tt0111161 | tt0903747:5:14 | ht:slug | ht:slug:5:14 | kitsu:1234:1:5
+ *   tt0111161 | tt0903747:5:14 | ht:slug | ht:slug:5:14 | pp:slug | pp:slug:5:14 | kitsu:1234:1:5
  */
 function parseStremioId(id) {
   const partes = String(id).split(':');
@@ -215,6 +234,24 @@ function parseStremioId(id) {
   if (/^ht:/i.test(id)) {
     return {
       fuente: 'ht',
+      slug: partes[1] || null,
+      season: partes.length >= 4 ? parseInt(partes[2], 10) : null,
+      episode: partes.length >= 4 ? parseInt(partes[3], 10) : null
+    };
+  }
+
+  if (/^pp:/i.test(id)) {
+    return {
+      fuente: 'pp',
+      slug: partes[1] || null,
+      season: partes.length >= 4 ? parseInt(partes[2], 10) : null,
+      episode: partes.length >= 4 ? parseInt(partes[3], 10) : null
+    };
+  }
+
+  if (/^ss:/i.test(id)) {
+    return {
+      fuente: 'ss',
       slug: partes[1] || null,
       season: partes.length >= 4 ? parseInt(partes[2], 10) : null,
       episode: partes.length >= 4 ? parseInt(partes[3], 10) : null
@@ -245,7 +282,7 @@ function parseStremioId(id) {
   return { fuente: 'slug', slug: String(id).replace(/^[a-z]+:/i, ''), season: null, episode: null };
 }
 
-/** Resuelve título/año del contenido desde Cinemeta (tt) o Kitsu (kitsu). */
+/** Resuelve título/año/TMDB ID del contenido desde Cinemeta (tt) o Kitsu (kitsu). */
 async function resolverInfo(type, req) {
   if (req.fuente === 'imdb') {
     const key = `cinemeta:${type}:${req.imdbId}`;
@@ -262,13 +299,15 @@ async function resolverInfo(type, req) {
       const info = {
         title: meta.name || null,
         originalTitle: meta.originalTitle || meta.original_name || null,
-        year: meta.releaseInfo || meta.year || null
+        year: meta.releaseInfo || meta.year || null,
+        tmdbId: meta.moviedb_id ? String(meta.moviedb_id) : (meta.tmdb_id ? String(meta.tmdb_id) : null),
+        altTitles: []
       };
       if (info.title) metaCacheSet(key, info);
       return info;
     }
-    // Último recurso: usar el propio IMDb ID como query
-    return { title: req.imdbId, originalTitle: null, year: null };
+    // Si Cinemeta falla, NO devolver el literal "tt0848228" como título (evita buscar IDs en texto)
+    return { title: null, originalTitle: null, year: null, tmdbId: null, altTitles: [] };
   }
 
   if (req.fuente === 'kitsu') {
@@ -281,21 +320,24 @@ async function resolverInfo(type, req) {
         headers: { Accept: 'application/vnd.api+json' }
       });
       const a = res.data?.data?.attributes || {};
+      const altTitles = [a.titles?.en, a.titles?.en_jp, a.titles?.ja_jp, ...(Array.isArray(a.abbreviatedTitles) ? a.abbreviatedTitles : [])].filter(Boolean);
       const info = {
         title: a.canonicalTitle || a.titles?.en || a.titles?.en_jp || null,
         originalTitle: a.titles?.en_jp || a.titles?.ja_jp || null,
         year: a.startDate ? String(a.startDate).slice(0, 4) : null,
+        tmdbId: null,
+        altTitles,
         tipoForzado: 'anime'
       };
       if (info.title) metaCacheSet(key, info);
       return info;
     } catch (e) {
       console.warn(`[Stream] Kitsu falló para ${req.kitsuId}:`, e.message);
-      return { title: null, originalTitle: null, year: null, tipoForzado: 'anime' };
+      return { title: null, originalTitle: null, year: null, tmdbId: null, altTitles: [], tipoForzado: 'anime' };
     }
   }
 
-  return { title: null, originalTitle: null, year: null };
+  return { title: null, originalTitle: null, year: null, tmdbId: null, altTitles: [] };
 }
 
 /** Genera variantes de búsqueda razonables para un título. */
@@ -304,11 +346,15 @@ function variantesDeBusqueda(info) {
   const push = (q) => {
     const v = String(q || '').trim();
     if (v.length < 2) return;
+    if (/^(tt\d+|kitsu:\d+)$/i.test(v)) return;
     if (!out.some(x => normalizeTitle(x) === normalizeTitle(v))) out.push(v);
   };
 
   push(info.title);
   push(info.originalTitle);
+  if (Array.isArray(info.altTitles)) {
+    for (const alt of info.altTitles) push(alt);
+  }
   if (info.title) {
     // "Avengers: Infinity War" -> "Avengers Infinity War"
     push(String(info.title).replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g, ' '));
@@ -323,12 +369,14 @@ function variantesDeBusqueda(info) {
 }
 
 /**
- * Busca en HackTorrent juntando resultados de varias variantes del título y los
- * ordena por similitud real (título/título original + año + tipo).
+ * Busca en HackTorrent juntando resultados de varias variantes del título
+ * (y resolución por TMDB ID cuando Cinemeta devuelve título en inglés) y los
+ * ordena por similitud real (título/título original + TMDB ID + año + tipo).
  */
 async function buscarCandidatos(info, tipoObjetivo) {
   const variantes = variantesDeBusqueda(info);
   const todos = new Map();
+  const altTitles = Array.isArray(info.altTitles) ? [...info.altTitles] : [];
 
   for (const q of variantes) {
     try {
@@ -340,31 +388,79 @@ async function buscarCandidatos(info, tipoObjetivo) {
     } catch (e) {
       console.warn(`[Stream] Búsqueda "${q}" falló:`, e.message);
     }
-    // Con suficientes candidatos relevantes no hace falta seguir probando
     if (todos.size >= 8) break;
   }
 
-  const lista = Array.from(todos.values());
-  if (lista.length === 0) return { ranked: [], variantes, lista: [] };
+  let lista = Array.from(todos.values());
+  let ranked = lista.length > 0
+    ? rankCandidates(lista, {
+      title: info.title,
+      originalTitle: info.originalTitle,
+      altTitles,
+      tmdbId: info.tmdbId,
+      year: info.year,
+      type: tipoObjetivo
+    })
+    : [];
 
-  const ranked = rankCandidates(lista, {
-    title: info.title,
-    originalTitle: info.originalTitle,
-    year: info.year,
-    type: tipoObjetivo
-  });
+  // Si tenemos tmdbId (de Cinemeta) y la búsqueda por título en inglés no dio
+  // coincidencia fuerte (p.ej. "The Wolf of Wall Street" -> "El lobo de Wall Street"),
+  // resolvemos el título exacto en español en HackTorrent usando /?tmdb={id}.
+  const mejorScoreInicial = ranked[0]?.score || 0;
+  if (info.tmdbId && mejorScoreInicial < 0.78 && typeof Scraper.buscarPorTmdb === 'function') {
+    try {
+      const porTmdb = await Scraper.buscarPorTmdb(info.tmdbId);
+      for (const r of porTmdb || []) {
+        if (!r || !r.slug) continue;
+        const t = r.titulo || r.title;
+        if (t && !altTitles.includes(t)) altTitles.push(t);
+        if (!todos.has(r.slug)) todos.set(r.slug, r);
+      }
+      if (porTmdb && porTmdb.length > 0) {
+        info.altTitles = altTitles;
+        lista = Array.from(todos.values());
+        ranked = rankCandidates(lista, {
+          title: info.title,
+          originalTitle: info.originalTitle,
+          altTitles,
+          tmdbId: info.tmdbId,
+          year: info.year,
+          type: tipoObjetivo
+        });
+      }
+    } catch (e) {
+      console.warn(`[Stream] Búsqueda TMDB ${info.tmdbId} falló:`, e.message);
+    }
+  }
+
+  if (lista.length === 0) return { ranked: [], variantes, lista: [] };
 
   return { ranked, variantes, lista };
 }
 
 /** Devuelve true si el detalle corresponde al candidato (evita redirects raros). */
 function detalleCoherente(detalle, candidato, info) {
+  if (detalle?.tmdbId && info?.tmdbId && String(detalle.tmdbId) === String(info.tmdbId)) {
+    return true;
+  }
   const tituloDetalle = detalle?.titulo || '';
-  if (!tituloDetalle) return true;
-  const a = similarity(tituloDetalle, candidato.titulo || candidato.title || '');
-  const b = similarity(tituloDetalle, info.title || '');
-  const c = similarity(tituloDetalle, info.originalTitle || '');
-  const mejor = Math.max(a, b, c);
+  const origDetalle = detalle?.tituloOriginal || '';
+  if (!tituloDetalle && !origDetalle) return true;
+
+  const refs = [
+    candidato?.titulo || candidato?.title || '',
+    candidato?.tituloOriginal || candidato?.originalTitle || '',
+    info?.title || '',
+    info?.originalTitle || '',
+    ...(Array.isArray(info?.altTitles) ? info.altTitles : [])
+  ].filter(Boolean);
+
+  let mejor = 0;
+  for (const ref of refs) {
+    if (tituloDetalle) mejor = Math.max(mejor, similarity(tituloDetalle, ref));
+    if (origDetalle) mejor = Math.max(mejor, similarity(origDetalle, ref));
+  }
+
   // Coincidencia muy baja y el título del detalle tampoco se parece al slug
   if (mejor < 0.35 && similarity(tituloDetalle, String(candidato.slug || '').replace(/-/g, ' ')) < 0.5) {
     console.warn(`[Stream] ⚠️ Detalle incoherente: "${tituloDetalle}" vs "${candidato.titulo}" (score ${mejor.toFixed(2)})`);
@@ -403,15 +499,25 @@ builder.defineCatalogHandler(async ({ type, id, extra }) => {
     console.log(`[Catalog] type=${type} id=${id} extra=${JSON.stringify(extra)}`);
 
     const busqueda = extra?.search ? String(extra.search).trim() : null;
+    const genero = extra?.genre && extra.genre !== 'Todos' ? String(extra.genre).trim() : null;
     const skip = extra?.skip ? parseInt(extra.skip, 10) : 0;
-    const page = Math.floor(skip / 20) + 1;
+    const PAGE_SIZE = 12;
+    const page = Math.floor(skip / PAGE_SIZE) + 1;
+
+    const esCatalogoPelisPanda = /^pelispanda/i.test(id || '') || /-hd$/i.test(id || '');
+    const esCatalogoSinSitio = /^sinsitio/i.test(id || '') || /-esp$/i.test(id || '');
+    const prefijoCatalogo = esCatalogoPelisPanda ? 'pp' : esCatalogoSinSitio ? 'ss' : 'ht';
 
     // --- A) BÚSQUEDA ---
     if (busqueda) {
       try {
-        const resultados = await Scraper.buscarEnHackTorrent(busqueda, null);
+        const resultados = esCatalogoPelisPanda
+          ? await PelisPanda.buscarEnPelisPanda(busqueda, null)
+          : esCatalogoSinSitio
+            ? await SinSitio.buscarEnSinSitio(busqueda, type === 'movie' ? 'pelicula' : 'serie')
+            : await Scraper.buscarEnHackTorrent(busqueda, null);
         if (!resultados || resultados.length === 0) {
-          console.log(`[Catalog] Búsqueda "${busqueda}" sin resultados`);
+          console.log(`[Catalog] Búsqueda "${busqueda}" (${prefijoCatalogo}) sin resultados`);
           return { metas: [] };
         }
 
@@ -423,8 +529,8 @@ builder.defineCatalogHandler(async ({ type, id, extra }) => {
         const ranked = rankCandidates(filtrados, { title: busqueda, type });
         const ordenados = ranked.length > 0 ? ranked.map(r => r.cand) : filtrados;
 
-        const metas = ordenados.slice(0, 50).map(item => toMetaPreview(item, type)).filter(Boolean);
-        console.log(`[Catalog] Búsqueda "${busqueda}" -> ${metas.length} metas`);
+        const metas = ordenados.slice(0, 50).map(item => toMetaPreview(item, type, prefijoCatalogo)).filter(Boolean);
+        console.log(`[Catalog] Búsqueda "${busqueda}" (${prefijoCatalogo}) -> ${metas.length} metas`);
         return { metas };
       } catch (err) {
         console.error(`[Catalog] Error en búsqueda "${busqueda}":`, err.message);
@@ -434,28 +540,84 @@ builder.defineCatalogHandler(async ({ type, id, extra }) => {
 
     // --- B) CATÁLOGO SIN BÚSQUEDA ---
     try {
-      if (type === 'movie' && id === 'hacktorrent-peliculas') {
-        const peliculas = await HT.getCatalogMovies(page);
+      if (esCatalogoSinSitio) {
+        const tipoCat = (type === 'series' || id === 'sinsitio-series' || id === 'univertorrent-series-esp') ? 'series' : 'peliculas';
+        const items = await SinSitio.obtenerCatalogo(tipoCat, page, genero);
+        if (!items || items.length === 0) return { metas: [] };
+        const stremioType = type === 'movie' ? 'movie' : 'series';
+        const metas = items
+          .map(item => toMetaPreview(item, stremioType, 'ss'))
+          .filter(Boolean);
+        const start = metas.length > 0 ? (skip % PAGE_SIZE) : 0;
+        return { metas: start < metas.length ? metas.slice(start) : metas };
+      }
+
+      if (esCatalogoPelisPanda) {
+        let tipoCat = 'peliculas';
+        if (id === 'pelispanda-estrenos' || id === 'univertorrent-estrenos-hd') tipoCat = 'estrenos';
+        else if (id === 'pelispanda-series' || id === 'univertorrent-series-hd') tipoCat = 'series';
+        else if (id === 'pelispanda-anime' || id === 'pelispanda-animes' || id === 'univertorrent-anime-hd' || id === 'univertorrent-animes-hd') tipoCat = 'animes';
+
+        const items = await PelisPanda.obtenerCatalogo(tipoCat, page, genero);
+        if (!items || items.length === 0) return { metas: [] };
+        const stremioType = type === 'movie' ? 'movie' : 'series';
+        const metas = items
+          .map(item => toMetaPreview(tipoCat === 'animes' ? { ...item, tipo: 'anime' } : item, stremioType, 'pp'))
+          .filter(Boolean);
+        const start = metas.length > 0 ? (skip % PAGE_SIZE) : 0;
+        return { metas: start < metas.length ? metas.slice(start) : metas };
+      }
+
+      const esEstrenosPrincipal = id === 'hacktorrent-estrenos' || id === 'univertorrent-estrenos';
+      const esPeliculasPrincipal = id === 'hacktorrent-peliculas' || id === 'univertorrent-peliculas' || esEstrenosPrincipal;
+
+      if (type === 'movie' && esPeliculasPrincipal) {
+        let peliculas = [];
+        if (esEstrenosPrincipal || genero) {
+          const tipoCat = esEstrenosPrincipal ? 'estrenos' : 'peliculas';
+          peliculas = await Scraper.obtenerCatalogo(tipoCat, page, genero);
+        } else {
+          peliculas = await HT.getCatalogMovies(page);
+          if (!peliculas || peliculas.length === 0) {
+            peliculas = await Scraper.obtenerCatalogo('peliculas', page, null);
+          }
+        }
         if (!peliculas || peliculas.length === 0) return { metas: [] };
         const metas = peliculas.map(p => toMetaPreview(p, 'movie')).filter(Boolean);
-        const start = skip % 20;
-        return { metas: metas.slice(start) };
+        const start = metas.length > 0 ? (skip % PAGE_SIZE) : 0;
+        return { metas: start < metas.length ? metas.slice(start) : metas };
       }
 
-      if (type === 'series' && id === 'hacktorrent-series') {
-        const series = await HT.getCatalogSeries(page);
+      if (type === 'series' && (id === 'hacktorrent-series' || id === 'univertorrent-series')) {
+        let series = [];
+        if (genero) {
+          series = await Scraper.obtenerCatalogo('series', page, genero);
+        } else {
+          series = await HT.getCatalogSeries(page);
+          if (!series || series.length === 0) {
+            series = await Scraper.obtenerCatalogo('series', page, null);
+          }
+        }
         if (!series || series.length === 0) return { metas: [] };
         const metas = series.map(s => toMetaPreview(s, 'series')).filter(Boolean);
-        const start = skip % 20;
-        return { metas: metas.slice(start) };
+        const start = metas.length > 0 ? (skip % PAGE_SIZE) : 0;
+        return { metas: start < metas.length ? metas.slice(start) : metas };
       }
 
-      if (type === 'series' && id === 'hacktorrent-anime') {
-        const anime = await HT.getCatalogAnime(page);
+      if (type === 'series' && (id === 'hacktorrent-anime' || id === 'hacktorrent-animes' || id === 'univertorrent-anime' || id === 'univertorrent-animes')) {
+        let anime = [];
+        if (genero) {
+          anime = await Scraper.obtenerCatalogo('animes', page, genero);
+        } else {
+          anime = await HT.getCatalogAnime(page);
+          if (!anime || anime.length === 0) {
+            anime = await Scraper.obtenerCatalogo('animes', page, null);
+          }
+        }
         if (!anime || anime.length === 0) return { metas: [] };
         const metas = anime.map(a => toMetaPreview({ ...a, tipo: 'anime' }, 'series')).filter(Boolean);
-        const start = skip % 20;
-        return { metas: metas.slice(start) };
+        const start = metas.length > 0 ? (skip % PAGE_SIZE) : 0;
+        return { metas: start < metas.length ? metas.slice(start) : metas };
       }
     } catch (err) {
       console.error(`[Catalog] Error cargando novedades type=${type} id=${id}:`, err.message);
@@ -468,6 +630,17 @@ builder.defineCatalogHandler(async ({ type, id, extra }) => {
     return { metas: [] };
   }
 });
+
+/** Asegura que los torrents seleccionados tengan magnet resuelto si traían acortalink. */
+async function asegurarMagnets(torrents) {
+  if (!Array.isArray(torrents) || torrents.length === 0) return [];
+  const necesitaResolucion = torrents.some(t => !t.magnet && !t.torrentUrl && (t.acortalink || t.acortarUrl));
+  if (!necesitaResolucion || typeof Scraper.resolverMagnetsEnLote !== 'function') {
+    return torrents;
+  }
+  const normalizados = torrents.map(t => (t.acortalink ? t : { ...t, acortalink: t.acortarUrl }));
+  return Scraper.resolverMagnetsEnLote(normalizados);
+}
 
 // ---------------------------------------------------------------------------
 // 2) STREAMS
@@ -488,7 +661,7 @@ builder.defineStreamHandler(async ({ type, id, config }) => {
     const esSerie = type === 'series';
 
     // Año, título y episodio objetivo
-    let info = { title: null, originalTitle: null, year: null };
+    let info = { title: null, originalTitle: null, year: null, tmdbId: null, altTitles: [] };
     let season = Number.isFinite(req.season) ? req.season : null;
     let episode = Number.isFinite(req.episode) ? req.episode : null;
 
@@ -514,15 +687,108 @@ builder.defineStreamHandler(async ({ type, id, config }) => {
         return responder(await externasHt);
       }
 
+      detalle.torrents = await asegurarMagnets(detalle.torrents);
       const propios = streamsDeDetalle(detalle, { titulo: detalle.titulo, season, episode, esSerie }).streams || [];
       return responder(fusionarStreams(propios, await externasHt));
+    }
+
+    // --- CASO A.2: id propio pp:slug (PelisPanda) ---
+    if (req.fuente === 'pp' && req.slug) {
+      const usarPelisPanda = activas.has('pp') || cfg.fuentes === DEFAULTS.fuentes;
+      const tipoPreferido = esSerie ? 'serie' : 'pelicula';
+      const detalle = usarPelisPanda
+        ? await PelisPanda.extraerDetalleTorrent(req.slug, tipoPreferido)
+        : null;
+
+      if (!detalle || !Array.isArray(detalle.torrents) || detalle.torrents.length === 0) {
+        console.log(`[Stream] Sin torrents para pp:${req.slug}`);
+        return responder([]);
+      }
+
+      if (esSerie && season !== null && episode !== null) {
+        const { exactos, packs } = filtrarPorEpisodio(detalle.torrents, season, episode);
+        const elegidos = exactos.length > 0 ? exactos : packs;
+        const esPack = exactos.length === 0 && packs.length > 0;
+        const resueltos = await PelisPanda.resolverMagnetsEnLote(elegidos);
+        const propios = resueltos
+          .map(t => PelisPanda.torrentToStream(t, detalle.titulo, {
+            titulo: detalle.titulo,
+            season,
+            episode: esPack ? null : episode,
+            esPack
+          }))
+          .filter(Boolean);
+        return responder(propios);
+      }
+
+      const filtrados = !esSerie
+        ? detalle.torrents.filter(t => {
+          const se = torrentSeasonEpisode(t);
+          return se.season === null && se.episode === null;
+        })
+        : detalle.torrents;
+      const resueltos = await PelisPanda.resolverMagnetsEnLote(filtrados);
+      const propios = resueltos
+        .map(t => PelisPanda.torrentToStream(t, detalle.titulo, {
+          titulo: detalle.titulo,
+          season: null,
+          episode: null
+        }))
+        .filter(Boolean);
+      return responder(propios);
+    }
+
+    // --- CASO A.3: id propio ss:slug (SinSitio) ---
+    if (req.fuente === 'ss' && req.slug) {
+      const usarSinSitio = activas.has('ss') || cfg.fuentes === DEFAULTS.fuentes;
+      const tipoPreferido = esSerie ? 'serie' : 'pelicula';
+      const detalle = usarSinSitio
+        ? await SinSitio.extraerDetalleTorrent(req.slug, tipoPreferido)
+        : null;
+
+      if (!detalle || !Array.isArray(detalle.torrents) || detalle.torrents.length === 0) {
+        console.log(`[Stream] Sin torrents para ss:${req.slug}`);
+        return responder([]);
+      }
+
+      if (esSerie && season !== null && episode !== null) {
+        const { exactos, packs } = filtrarPorEpisodio(detalle.torrents, season, episode);
+        const elegidos = exactos.length > 0 ? exactos : packs;
+        const esPack = exactos.length === 0 && packs.length > 0;
+        const resueltos = await SinSitio.resolverMagnetsEnLote(elegidos, { season, episode });
+        const propios = resueltos
+          .map(t => SinSitio.torrentToStream(t, detalle.titulo, {
+            titulo: detalle.titulo,
+            season,
+            episode: esPack ? null : episode,
+            esPack
+          }))
+          .filter(Boolean);
+        return responder(propios);
+      }
+
+      const filtrados = !esSerie
+        ? detalle.torrents.filter(t => {
+          const se = torrentSeasonEpisode(t);
+          return se.season === null && se.episode === null;
+        })
+        : detalle.torrents;
+      const resueltos = await SinSitio.resolverMagnetsEnLote(filtrados.length > 0 ? filtrados : detalle.torrents);
+      const propios = resueltos
+        .map(t => SinSitio.torrentToStream(t, detalle.titulo, {
+          titulo: detalle.titulo,
+          season: null,
+          episode: null
+        }))
+        .filter(Boolean);
+      return responder(propios);
     }
 
     // --- CASO B: tt (Cinemeta) / kitsu / slug suelto ---
     if (req.fuente !== 'slug') {
       info = await resolverInfo(type, req);
     } else {
-      info = { title: decodeURIComponent(req.slug || '').replace(/-/g, ' '), originalTitle: null, year: null };
+      info = { title: decodeURIComponent(req.slug || '').replace(/-/g, ' '), originalTitle: null, year: null, tmdbId: null, altTitles: [] };
     }
 
     if (!info || !info.title) {
@@ -533,10 +799,12 @@ builder.defineStreamHandler(async ({ type, id, config }) => {
     const tipoObjetivo = esSerie ? 'series' : 'movie';
     console.log(`[Stream] Objetivo: "${info.title}"${info.originalTitle ? ` / "${info.originalTitle}"` : ''} (${info.year || '?'}) → ${tipoObjetivo}`);
 
-    // Fuentes externas (inglés) en paralelo: no bloquean ni rompen HackTorrent
+    // Fuentes adicionales (PelisPanda en Latino + fuentes en inglés) en paralelo
     const externasPromise = buscarEnFuentesExternas({
       title: info.title,
       originalTitle: info.originalTitle,
+      altTitles: info.altTitles,
+      tmdbId: info.tmdbId,
       year: info.year,
       type: tipoObjetivo,
       season,
@@ -572,6 +840,8 @@ builder.defineStreamHandler(async ({ type, id, config }) => {
       const animeRanked = rankCandidates(lista, {
         title: info.title,
         originalTitle: info.originalTitle,
+        altTitles: info.altTitles,
+        tmdbId: info.tmdbId,
         year: info.year,
         type: 'series'
       }).filter(r => String(r.cand.tipo || '').toLowerCase() === 'anime');
@@ -600,6 +870,8 @@ builder.defineStreamHandler(async ({ type, id, config }) => {
       const elegidos = pickBestMatch(ranked.map(r => r.cand), {
         title: info.title,
         originalTitle: info.originalTitle,
+        altTitles: info.altTitles,
+        tmdbId: info.tmdbId,
         year: info.year,
         type: tipoObjetivo
       });
@@ -653,21 +925,24 @@ builder.defineStreamHandler(async ({ type, id, config }) => {
         }
         if (exactos.length === 0) {
           console.log(`[Stream] ${cand.slug}: sin episodio exacto, usando ${packs.length} pack(s) de T${season}`);
+          const resueltosPacks = await asegurarMagnets(packs);
           return responderConExternas(
-            packs
+            resueltosPacks
               .map(t => torrentToStream(t, detalle.titulo, { titulo: detalle.titulo, season, episode: null, esPack: true }))
               .filter(Boolean)
           );
         }
         console.log(`[Stream] ${cand.slug} → ${exactos.length} torrent(s) para S${season}E${episode}`);
+        const resueltosExactos = await asegurarMagnets(exactos);
         return responderConExternas(
-          exactos
+          resueltosExactos
             .map(t => torrentToStream(t, detalle.titulo, { titulo: detalle.titulo, season, episode }))
             .filter(Boolean)
         );
       }
 
       console.log(`[Stream] ${cand.slug} → ${detalle.torrents.length} torrent(s)`);
+      detalle.torrents = await asegurarMagnets(detalle.torrents);
       return responderConExternas(streamsDeDetalle(detalle, { titulo: detalle.titulo, season, episode, esSerie }).streams || []);
     }
 
@@ -704,8 +979,15 @@ function streamsDeDetalle(detalle, { titulo, season, episode, esSerie }) {
     return { streams: [] };
   }
 
+  const filtrados = !esSerie
+    ? torrents.filter(t => {
+      const se = torrentSeasonEpisode(t);
+      return se.season === null && se.episode === null;
+    })
+    : torrents;
+
   return {
-    streams: torrents
+    streams: filtrados
       .map(t => torrentToStream(t, titulo, { titulo, season: null, episode: null }))
       .filter(Boolean)
   };
@@ -716,17 +998,25 @@ function streamsDeDetalle(detalle, { titulo, season, episode, esSerie }) {
 // ---------------------------------------------------------------------------
 builder.defineMetaHandler(async ({ type, id }) => {
   try {
-    if (!id.startsWith('ht:')) return { meta: null };
+    const esHt = id.startsWith('ht:');
+    const esPp = id.startsWith('pp:');
+    const esSs = id.startsWith('ss:');
+    if (!esHt && !esPp && !esSs) return { meta: null };
+    const prefijo = esPp ? 'pp' : esSs ? 'ss' : 'ht';
     const partes = id.split(':');
     const slug = partes[1];
     if (!slug) return { meta: null };
 
     let detalle = null;
     try {
-      detalle = await Scraper.extraerDetalleTorrent(slug, type === 'movie' ? 'pelicula' : 'serie');
+      detalle = esPp
+        ? await PelisPanda.extraerDetalleTorrent(slug, type === 'movie' ? 'pelicula' : 'serie')
+        : esSs
+          ? await SinSitio.extraerDetalleTorrent(slug, type === 'movie' ? 'pelicula' : 'serie')
+          : await Scraper.extraerDetalleTorrent(slug, type === 'movie' ? 'pelicula' : 'serie');
     } catch { /* seguimos con el fallback */ }
 
-    if (!detalle || !detalle.titulo || (detalle.torrents || []).length === 0) {
+    if (esHt && (!detalle || !detalle.titulo || (detalle.torrents || []).length === 0)) {
       const htDetalle = type === 'movie' ? await HT.getMovieDetail(slug) : await HT.getSerieDetail(slug);
       if (htDetalle) {
         detalle = {
@@ -734,12 +1024,14 @@ builder.defineMetaHandler(async ({ type, id }) => {
           tituloOriginal: htDetalle.original_title,
           slug: htDetalle.slug || slug,
           año: htDetalle.year || htDetalle.years || null,
+          sinopsis: htDetalle.overview || '',
           descripcion: htDetalle.overview || '',
           poster: htDetalle.featured
             ? (String(htDetalle.featured).startsWith('/') ? `https://image.tmdb.org/t/p/w300${htDetalle.featured}` : htDetalle.featured)
             : null,
           background: htDetalle.background_image || null,
-          genres: htDetalle.genres || null,
+          generos: htDetalle.genres ? String(htDetalle.genres).split(',').map(g => g.trim()).filter(Boolean) : [],
+          imdbRating: htDetalle.imdb || null,
           torrents: (htDetalle.downloads || []).map(d => ({
             calidad: d.quality,
             tamaño: d.size,
@@ -751,7 +1043,9 @@ builder.defineMetaHandler(async ({ type, id }) => {
         };
       }
     }
-    if (!detalle) return { meta: null };
+    if (!detalle || !detalle.titulo) return { meta: null };
+
+    const sinopsis = detalle.sinopsis || detalle.descripcion || detalle.overview || '';
 
     // Videos (episodios) para series
     let videos;
@@ -763,12 +1057,12 @@ builder.defineMetaHandler(async ({ type, id }) => {
         const key = `${se.season}:${se.episode}`;
         if (seen.has(key)) continue;
         seen.set(key, {
-          id: `ht:${slug}:${se.season}:${se.episode}`,
+          id: `${prefijo}:${slug}:${se.season}:${se.episode}`,
           title: `T${se.season} E${se.episode} - ${t.calidad || 'WEB-DL'}`,
           season: se.season,
           episode: se.episode,
           released: detalle.año ? `${String(detalle.año).slice(0, 4)}-01-01T00:00:00.000Z` : undefined,
-          overview: detalle.descripcion || ''
+          overview: sinopsis
         });
       }
       if (seen.size > 0) {
@@ -776,18 +1070,26 @@ builder.defineMetaHandler(async ({ type, id }) => {
       }
     }
 
+    const rawGen = Array.isArray(detalle.generos) && detalle.generos.length > 0
+      ? detalle.generos
+      : detalle.genres
+        ? String(detalle.genres).split(',').map(g => g.trim()).filter(Boolean)
+        : [];
+
     return {
       meta: {
-        id: `ht:${slug}`,
+        id: `${prefijo}:${slug}`,
         type,
         name: detalle.titulo,
         poster: detalle.poster || undefined,
         background: detalle.background || detalle.poster || undefined,
-        description: detalle.descripcion || detalle.overview || '',
+        description: sinopsis,
         releaseInfo: detalle.año ? String(detalle.año).slice(0, 4) : '',
-        genres: detalle.genres
-          ? String(detalle.genres).split(',').map(g => g.trim()).filter(Boolean)
-          : undefined,
+        imdbRating: detalle.imdbRating || undefined,
+        genres: rawGen.length > 0 ? rawGen : undefined,
+        cast: Array.isArray(detalle.actores) && detalle.actores.length > 0 ? detalle.actores : undefined,
+        director: detalle.director ? [detalle.director] : undefined,
+        runtime: detalle.duracion || undefined,
         videos
       }
     };
@@ -807,14 +1109,20 @@ if (require.main === module) {
   const port = process.env.PORT || 7000;
   const app = createApp(addonInterface);
 
-  // 0.0.0.0 para funcionar detrás de proxies (Render, Docker, previews)
+  // 0.0.0.0 para funcionar detrás de proxies (Beamup / baby-beamup.club, Render, Docker, previews)
   const server = app.listen(port, '0.0.0.0', () => {
-    console.log(`🚀 HackTorrent Addon corriendo en el puerto ${port}`);
-    console.log(`   Configuración: /configure`);
-    console.log(`   Manifest:      /manifest.json`);
-    console.log(`   Catálogos:     ${manifest.catalogs.map(c => c.name).join(', ')}`);
-    console.log(`   Fuentes:       HackTorrent (Latino) + Knaben + Torrents.csv${BlackHoleBay.BLACKHOLEBAY_ENABLED ? ' + Black Hole Bay' : ' (Black Hole Bay opcional)'}`);
+    console.log(`🚀 UniverTorrent Addon corriendo en el puerto ${port}`);
+    console.log(`   Subdominio Beamup: ${BEAMUP_ORIGIN}`);
+    console.log(`   Manifest Beamup:   ${BEAMUP_ORIGIN}/manifest.json`);
+    console.log(`   Configuración:     /configure (Español: /es/configure | Inglés: /en/configure)`);
+    console.log(`   Manifest:          /manifest.json (Español: /es/manifest.json | Inglés: /en/manifest.json)`);
+    console.log(`   Catálogos:         ${manifest.catalogs.map(c => c.name).join(', ')}`);
   });
+
+  // Timeouts extendidos para muchos usuarios concurrentes y respuestas largas (Beamup / servidor persistente)
+  server.keepAliveTimeout = 65000;
+  server.headersTimeout = 66000;
+  server.requestTimeout = 60000;
 
   const apagar = () => server.close(() => process.exit(0));
   process.on('SIGTERM', apagar);

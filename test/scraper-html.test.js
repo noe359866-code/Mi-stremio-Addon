@@ -154,3 +154,95 @@ test('API: descarta enlaces web que no son torrents', () => {
   const out = Scraper._collectDownloads(payload, 'movie');
   assert.strictEqual(out.length, 1);
 });
+
+test('decryptAcortalink desencripta enlaces de acortalink.net offline (AES-256-CBC Salted__)', async () => {
+  const crypto = require('crypto');
+  const password = Buffer.from('fee631d2cffda38a78b96ee6d2dfb43a', 'utf8');
+  const salt = Buffer.from('12345678', 'utf8');
+  let d = Buffer.alloc(0);
+  let prev = Buffer.alloc(0);
+  while (d.length < 48) {
+    prev = crypto.createHash('md5').update(Buffer.concat([prev, password, salt])).digest();
+    d = Buffer.concat([d, prev]);
+  }
+  const cipher = crypto.createCipheriv('aes-256-cbc', d.subarray(0, 32), d.subarray(32, 48));
+  const magnetOriginal = 'magnet:?xt=urn:btih:df0c7f2ffcefcfa83b0b8bd0de3d69b86b5aa5c4&dn=%5BHackstore.net%5D%20From%20S01E01%201080p&xl=1610612736';
+  const encrypted = Buffer.concat([cipher.update(magnetOriginal, 'utf8'), cipher.final()]);
+  const saltedB64 = Buffer.concat([Buffer.from('Salted__'), salt, encrypted]).toString('base64');
+  const innerB64 = Buffer.from(saltedB64, 'utf8').toString('base64');
+  const testUrl = `https://acortalink.net/s.php?i=${encodeURIComponent(innerB64)}`;
+
+  const decrypted = Scraper.decryptAcortalink(testUrl);
+  assert.strictEqual(decrypted, magnetOriginal);
+
+  // Y resolverAcortalink lo resuelve sin hacer peticiones HTTP
+  const resolved = await Scraper.resolverAcortalink(testUrl);
+  assert.strictEqual(resolved, magnetOriginal);
+  assert.strictEqual(Scraper._internals.formatSizeFromMagnet(resolved), '1.50 GB');
+});
+
+test('parseHtmlDetail desambigua encabezados reales concatenados ("Temporada 110 Episodios" y "Temporada 12 Episodios")', () => {
+  // En hacktorrent.cc, <div><span>Temporada 1</span><span>10 Episodios</span></div> produce "Temporada 110 Episodios" en .text()
+  const rows10 = Array.from({ length: 10 }, (_, idx) => {
+    const ep = idx + 1;
+    return `
+      <tr>
+        <td>${ep}</td>
+        <td>1080p</td>
+        <td>1.4 GB</td>
+        <td>Si</td>
+        <td>Latino/Ingles</td>
+        <td>2024-05-0${Math.min(ep, 9)}</td>
+        <td>
+          <a href="magnet:?xt=urn:btih:${String(ep).padStart(40, 'a')}&dn=From.S01E${String(ep).padStart(2, '0')}.1080p">Descargar</a>
+          <a href="https://hacktorrent.cc/serie/from/player/1/${ep}">Ver</a>
+        </td>
+      </tr>
+    `;
+  }).join('');
+
+  // Y para una serie con 2 episodios en la Temporada 1 ("Temporada 12 Episodios")
+  const rows2 = [1, 2].map(ep => `
+    <tr>
+      <td>${ep}</td>
+      <td>1080p</td>
+      <td>1.2 GB</td>
+      <td>Si</td>
+      <td>Latino</td>
+      <td>2026-04-0${ep}</td>
+      <td>
+        <a href="magnet:?xt=urn:btih:${String(ep).padStart(40, 'b')}">Descargar</a>
+        <a href="https://hacktorrent.cc/serie/phony-la-otra-madre/player/1/${ep}">Ver</a>
+      </td>
+    </tr>
+  `).join('');
+
+  const html = `
+    <html>
+      <body>
+        <h1>From (2022)</h1>
+        <div><div><span>Temporada 1</span><span>10 Episodios</span></div><table><tbody>${rows10}</tbody></table></div>
+        <div><div><span>Temporada 1</span><span>2 Episodios</span></div><table><tbody>${rows2}</tbody></table></div>
+      </body>
+    </html>
+  `;
+
+  const detail = Scraper._parseHtmlDetail(html, { slug: 'from', tipo: 'serie', url: 'https://hacktorrent.cc/serie/from/' });
+  assert.strictEqual(detail.torrents.length, 12);
+  for (const t of detail.torrents) {
+    assert.strictEqual(t.temporada, 1, `Temporada debe ser 1 y no ${t.temporada}`);
+  }
+  assert.strictEqual(detail.torrents[0].episodio, 1);
+  assert.strictEqual(detail.torrents[9].episodio, 10);
+});
+
+test('normalizarMagnet y base32ToHex convierten magnets híbridos BitTorrent v2/v1 con hash Base32', () => {
+  // Magnet híbrido real de hacktorrent.cc (/wp-json/wpreact/v1/anime/chainsmoker-cat)
+  const hybridMagnet = 'magnet:?xt=urn:btmh:12206ff0ba03abce1bf3f610f729f2d56e7df3dd3e3e4d439340928426cb6cb2f2eb&xt=urn:btih:NR747Z6UZW3Y5BX74NUXA3X2B6F7H5B2&dn=%5BHackstore.net%5D%20Chainsmoker%20Cat%20S01E01&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce';
+  assert.strictEqual(Scraper._internals.isValidMagnet(hybridMagnet), true);
+
+  const normalized = Scraper.normalizarMagnet(hybridMagnet);
+  assert.ok(normalized.startsWith('magnet:?xt=urn:btih:6c7fcfe7d4cdb78e86ffe369706efa0f8bf3f43a'));
+  assert.ok(normalized.includes('dn='));
+});
+

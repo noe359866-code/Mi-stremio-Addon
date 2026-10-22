@@ -1,8 +1,8 @@
 {
-  "id": "com.hacktorrent.addon",
-  "version": "1.5.0",
-  "name": "HackTorrent",
-  "description": "Catálogos y streams de películas, series y anime: HackTorrent.cc (Latino/Dual), Knaben, Torrents.csv y The Black Hole Bay opcional. Empareja por título, año y episodio exacto para evitar torrents equivocados.",
+  "id": "com.univertorrent.addon",
+  "version": "1.6.0",
+  "name": "UniverTorrent",
+  "description": "Catálogos y streams universales de películas, series y anime en Español (Latino, Castellano y Dual) e Inglés (VO) en HD, 1080p y 4K. Optimizado para alta concurrencia.",
   "logo": "https://i.imgur.com/8N987Z7.png",
   "background": "https://image.tmdb.org/t/p/original//9BBTo63ANSmhC4e6r62OJFuK2GL.jpg",
   "resources": [
@@ -17,8 +17,8 @@
   "catalogs": [
     {
       "type": "movie",
-      "id": "hacktorrent-peliculas",
-      "name": "HackTorrent - Películas",
+      "id": "univertorrent-peliculas",
+      "name": "UniverTorrent - Películas",
       "extra": [
         {
           "name": "search",
@@ -47,9 +47,9 @@
       ]
     },
     {
-      "type": "series",
-      "id": "hacktorrent-series",
-      "name": "HackTorrent - Series",
+      "type": "movie",
+      "id": "univertorrent-estrenos",
+      "name": "UniverTorrent - Estrenos",
       "extra": [
         {
           "name": "search",
@@ -63,12 +63,175 @@
     },
     {
       "type": "series",
-      "id": "hacktorrent-anime",
-      "name": "HackTorrent - Anime",
+      "id": "univertorrent-series",
+      "name": "UniverTorrent - Series",
       "extra": [
         {
           "name": "search",
           "isRequired": false
+        },
+        {
+          "name": "genre",
+          "isRequired": false,
+          "options": [
+            "Acción",
+            "Aventura",
+            "Comedia",
+            "Drama",
+            "Terror",
+            "Suspense",
+            "Ciencia ficción",
+            "Animación",
+            "Familia",
+            "Crimen",
+            "Misterio"
+          ]
+        },
+        {
+          "name": "skip",
+          "isRequired": false
+        }
+      ]
+    },
+    {
+      "type": "series",
+      "id": "univertorrent-anime",
+      "name": "UniverTorrent - Anime",
+      "extra": [
+        {
+          "name": "search",
+          "isRequired": false
+        },
+        {
+          "name": "skip",
+          "isRequired": false
+        }
+      ]
+    },
+    {
+      "type": "movie",
+      "id": "univertorrent-peliculas-hd",
+      "name": "UniverTorrent - Películas HD",
+      "extra": [
+        {
+          "name": "search",
+          "isRequired": false
+        },
+        {
+          "name": "genre",
+          "isRequired": false,
+          "options": [
+            "Acción",
+            "Aventura",
+            "Comedia",
+            "Drama",
+            "Terror",
+            "Suspense",
+            "Ciencia ficción",
+            "Animación",
+            "Familia",
+            "Crimen",
+            "Misterio"
+          ]
+        },
+        {
+          "name": "skip",
+          "isRequired": false
+        }
+      ]
+    },
+    {
+      "type": "series",
+      "id": "univertorrent-series-hd",
+      "name": "UniverTorrent - Series HD",
+      "extra": [
+        {
+          "name": "search",
+          "isRequired": false
+        },
+        {
+          "name": "genre",
+          "isRequired": false,
+          "options": [
+            "Acción",
+            "Aventura",
+            "Comedia",
+            "Drama",
+            "Terror",
+            "Suspense",
+            "Ciencia ficción",
+            "Animación",
+            "Familia",
+            "Crimen",
+            "Misterio"
+          ]
+        },
+        {
+          "name": "skip",
+          "isRequired": false
+        }
+      ]
+    },
+    {
+      "type": "series",
+      "id": "univertorrent-anime-hd",
+      "name": "UniverTorrent - Anime HD",
+      "extra": [
+        {
+          "name": "search",
+          "isRequired": false
+        },
+        {
+          "name": "skip",
+          "isRequired": false
+        }
+      ]
+    },
+    {
+      "type": "movie",
+      "id": "univertorrent-cine-esp",
+      "name": "UniverTorrent - Cine Castellano y Latino",
+      "extra": [
+        {
+          "name": "search",
+          "isRequired": false
+        },
+        {
+          "name": "genre",
+          "isRequired": false,
+          "options": [
+            "Estrenos",
+            "Castellano",
+            "Latino",
+            "Bluray 1080p",
+            "Clásicos",
+            "Subtitulado",
+            "Reliberación",
+            "Documentales"
+          ]
+        },
+        {
+          "name": "skip",
+          "isRequired": false
+        }
+      ]
+    },
+    {
+      "type": "series",
+      "id": "univertorrent-series-esp",
+      "name": "UniverTorrent - Series Castellano y Latino",
+      "extra": [
+        {
+          "name": "search",
+          "isRequired": false
+        },
+        {
+          "name": "genre",
+          "isRequired": false,
+          "options": [
+            "Series HD",
+            "Series Clásicas"
+          ]
         },
         {
           "name": "skip",
@@ -80,6 +243,8 @@
   "idPrefixes": [
     "tt",
     "ht",
+    "pp",
+    "ss",
     "kitsu"
   ],
   "behaviorHints": {
@@ -90,41 +255,46 @@
     {
       "key": "idioma",
       "type": "select",
-      "title": "Idioma del audio",
+      "title": "Idioma del audio / Audio Language",
       "default": "ambos",
       "options": [
         "ambos",
+        "espanol",
         "latino",
         "ingles"
       ]
     },
     {
+      "key": "ui",
+      "type": "select",
+      "title": "Idioma de interfaz / Interface Language",
+      "default": "es",
+      "options": [
+        "es",
+        "en"
+      ]
+    },
+    {
       "key": "fuentes",
       "type": "select",
-      "title": "Fuentes (ht,knaben,tbb,tcsv)",
-      "default": "ht,knaben,tcsv",
+      "title": "Servidores / Stream Sources",
+      "default": "todas",
       "options": [
-        "ht",
-        "knaben",
-        "tbb",
-        "tcsv",
-        "ht,knaben",
-        "ht,tbb",
-        "ht,tcsv",
-        "knaben,tbb",
-        "knaben,tcsv",
-        "tbb,tcsv",
-        "ht,knaben,tbb",
-        "ht,knaben,tcsv",
-        "ht,tbb,tcsv",
-        "knaben,tbb,tcsv",
-        "ht,knaben,tbb,tcsv"
+        "todas",
+        "espanol",
+        "ingles",
+        "es1",
+        "es2",
+        "es3",
+        "en1",
+        "en2",
+        "en3"
       ]
     },
     {
       "key": "calidad",
       "type": "select",
-      "title": "Calidad mínima",
+      "title": "Calidad mínima / Min Quality",
       "default": "cualquiera",
       "options": [
         "cualquiera",
@@ -136,7 +306,7 @@
     {
       "key": "orden",
       "type": "select",
-      "title": "Orden de resultados",
+      "title": "Orden de resultados / Sort Order",
       "default": "latino",
       "options": [
         "latino",
@@ -147,13 +317,13 @@
     {
       "key": "max",
       "type": "number",
-      "title": "Máximo de resultados",
+      "title": "Máximo de resultados / Max Results",
       "default": "25"
     },
     {
       "key": "packs",
       "type": "checkbox",
-      "title": "Permitir packs de temporada",
+      "title": "Permitir packs de temporada / Allow Season Packs",
       "default": "true"
     }
   ]
