@@ -23,10 +23,14 @@ const H = {
   bb0206: 'e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6',
   from0102: 'f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1',
   naruto01: 'a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0',
-  naruto03: 'a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3'
+  naruto03: 'a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3',
+  wolf2013: 'c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7'
 };
 
 const SEARCH = {
+  'el lobo de wall street': [
+    { title: 'El lobo de Wall Street', original_title: 'The Wolf of Wall Street', tmdb_id: '106646', slug: 'el-lobo-de-wall-street', year: '2013', type: 'pelicula' }
+  ],
   'the avengers': [
     { title: 'Avengers: Age of Ultron', original_title: 'Avengers: Age of Ultron', slug: 'avengers-age-of-ultron', year: '2015', type: 'pelicula' },
     { title: 'Avengers: Infinity War', original_title: 'Avengers: Infinity War', slug: 'avengers-infinity-war', year: '2018', type: 'pelicula' },
@@ -106,11 +110,18 @@ const DETAILS = {
       { quality: '1080p', size: '1 GB', language: 'Latino', subs: 1, season: 1, episode: 1, download_link: MAGNET(H.naruto01, 'Naruto.S01E01.1080p-Lat') },
       { quality: '1080p', size: '1 GB', language: 'Latino', subs: 1, season: 1, episode: 3, download_link: MAGNET(H.naruto03, 'Naruto.S01E03.1080p-Lat') }
     ]
+  },
+  'movie/el-lobo-de-wall-street': {
+    slug: 'el-lobo-de-wall-street', title: 'El lobo de Wall Street', original_title: 'The Wolf of Wall Street', tmdb_id: '106646', type: 'pelicula', year: '2013',
+    downloads: [
+      { quality: 'BluRay 1080p', size: '3.8 GB', language: 'Latino/Inglés', subs: 1, download_link: MAGNET(H.wolf2013, 'El.lobo.de.Wall.Street.2013.1080p-Lat') }
+    ]
   }
 };
 
 const CINEMETA = {
   'movie/tt0848228': { name: 'The Avengers', releaseInfo: '2012', type: 'movie' },
+  'movie/tt0993846': { name: 'The Wolf of Wall Street', releaseInfo: '2013', moviedb_id: 106646, type: 'movie' },
   'movie/tt1160419': { name: 'Dune', releaseInfo: '2021', type: 'movie' },
   'series/tt0903747': { name: 'Breaking Bad', releaseInfo: '2008-01-20', type: 'series' },
   'series/tt1243640': { name: 'From', releaseInfo: '2022-02-20', type: 'series' },
@@ -145,6 +156,15 @@ axios.get = async (url) => {
       status: 200,
       headers: {},
       data: { data: { attributes: { canonicalTitle: 'Naruto', startDate: '2002-10-03', titles: { en: 'Naruto', en_jp: 'Naruto' } } } }
+    };
+  }
+
+  // Resolución TMDB en HackTorrent
+  if (u.includes('hacktorrent.cc/?tmdb=106646')) {
+    return {
+      status: 200,
+      headers: {},
+      data: '<p>The link has moved to <a href="">El lobo de Wall Street</a></p>'
     };
   }
 
@@ -335,3 +355,10 @@ test('la respuesta nunca incluye metadatos internos', async () => {
   const { streams } = await addon.get('stream', 'movie', 'tt0848228', {}, { fuentes: 'ht,knaben' });
   for (const s of streams) assert.strictEqual(s._meta, undefined);
 });
+
+test('película con título en inglés en Cinemeta se resuelve vía moviedb_id (TMDB) al título en español en HackTorrent', async () => {
+  const { streams } = await addon.get('stream', 'movie', 'tt0993846', {}, { fuentes: 'ht' });
+  const hs = hashes(streams);
+  assert.ok(hs.includes(H.wolf2013), 'debe resolver "The Wolf of Wall Street" -> "El lobo de Wall Street" vía TMDB ID');
+});
+

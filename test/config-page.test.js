@@ -126,6 +126,16 @@ test('servidor: manifest con configuración en la URL y stream con config', asyn
     assert.strictEqual(stream.status, 200);
     const payload = await stream.json();
     assert.ok(Array.isArray(payload.streams));
+
+    // Rutas dedicadas en Español (/es/manifest.json) e Inglés (/en/manifest.json)
+    const mfEs = await (await fetch(`${base}/es/manifest.json`)).json();
+    assert.strictEqual(mfEs.name, 'UniverTorrent');
+    assert.ok(mfEs.description.includes('Español'));
+
+    const mfEn = await (await fetch(`${base}/en/manifest.json`)).json();
+    assert.strictEqual(mfEn.name, 'UniverTorrent');
+    assert.ok(mfEn.description.includes('English'));
+    assert.ok(mfEn.catalogs.some(c => c.name === 'UniverTorrent - Movies'));
   } finally {
     server.close();
   }

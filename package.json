@@ -1,7 +1,7 @@
 {
-  "name": "hacktorrent-stremio-addon",
-  "version": "1.5.0",
-  "description": "Stremio Addon - Catálogos y streams desde HackTorrent.cc (Latino) + Knaben y The Black Hole Bay (inglés) para películas, series y anime",
+  "name": "univertorrent-stremio-addon",
+  "version": "1.6.0",
+  "description": "UniverTorrent Stremio Addon - Catálogos y streams universales para películas, series y anime en Español (Latino, Castellano y Dual) e Inglés (VO)",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
@@ -11,7 +11,7 @@
   "keywords": [
     "stremio",
     "addon",
-    "hacktorrent",
+    "univertorrent",
     "torrent",
     "stream",
     "catalog"
