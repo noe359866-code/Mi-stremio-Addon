@@ -99,14 +99,24 @@ test('servidor: / redirige a /configure, /health responde y /configure sirve HTM
     const mf = await fetch(`${base}/manifest.json`);
     assert.strictEqual(mf.status, 200);
     const manifestServido = await mf.json();
+    assert.deepStrictEqual(manifestServido.resources, ['stream']);
+    assert.deepStrictEqual(manifestServido.catalogs, []);
+    assert.deepStrictEqual(manifestServido.idPrefixes, ['tt', 'kitsu']);
+    assert.strictEqual(manifestServido.behaviorHints.p2p, true);
     assert.strictEqual(manifestServido.behaviorHints.configurable, true);
     assert.ok(Array.isArray(manifestServido.config) && manifestServido.config.length >= 6);
+
+    // No expone rutas de catálogo ni de meta
+    const cat404 = await fetch(`${base}/catalog/movie/univertorrent-peliculas.json`);
+    assert.strictEqual(cat404.status, 404);
+    const meta404 = await fetch(`${base}/meta/movie/tt0848228.json`);
+    assert.strictEqual(meta404.status, 404);
   } finally {
     server.close();
   }
 });
 
-test('servidor: manifest con configuración en la URL y stream con config', async () => {
+test('servidor: manifest con configuración en la URL y stream con config (sin catálogos)', async () => {
   const addonInterface = require('../index');
   const app = createApp(addonInterface);
   const server = app.listen(0, '127.0.0.1');
@@ -121,21 +131,26 @@ test('servidor: manifest con configuración en la URL y stream con config', asyn
     const manifestServido = await mf.json();
     // Ya instalado: el SDK quita "configurable" para no reconfigurar desde la app
     assert.ok(manifestServido.config);
+    assert.deepStrictEqual(manifestServido.resources, ['stream']);
+    assert.deepStrictEqual(manifestServido.catalogs, []);
 
     const stream = await fetch(`${base}/${cfg}/stream/movie/tt0848228.json`);
     assert.strictEqual(stream.status, 200);
     const payload = await stream.json();
     assert.ok(Array.isArray(payload.streams));
 
-    // Rutas dedicadas en Español (/es/manifest.json) e Inglés (/en/manifest.json)
+    // Rutas dedicadas en Español (/es/manifest.json) e Inglés (/en/manifest.json) sin catálogos
     const mfEs = await (await fetch(`${base}/es/manifest.json`)).json();
     assert.strictEqual(mfEs.name, 'UniverTorrent');
     assert.ok(mfEs.description.includes('Español'));
+    assert.deepStrictEqual(mfEs.catalogs, []);
+    assert.deepStrictEqual(mfEs.resources, ['stream']);
 
     const mfEn = await (await fetch(`${base}/en/manifest.json`)).json();
     assert.strictEqual(mfEn.name, 'UniverTorrent');
     assert.ok(mfEn.description.includes('English'));
-    assert.ok(mfEn.catalogs.some(c => c.name === 'UniverTorrent - Movies'));
+    assert.deepStrictEqual(mfEn.catalogs, []);
+    assert.deepStrictEqual(mfEn.resources, ['stream']);
   } finally {
     server.close();
   }

@@ -192,11 +192,14 @@ test('máximo de resultados (con mínimo de seguridad 5 y tope 60)', () => {
   assert.strictEqual(normalizarConfig({ max: 999 }).max, 60);
 });
 
-test('los metadatos internos (_meta) no se envían a Stremio', () => {
+test('los metadatos internos (_meta) no se envían a Stremio y el stream es Torrent puro (infoHash + sources, sin url)', () => {
   const salida = aplicarConfig(MUESTRA, TODAS);
   for (const s of salida) {
     assert.strictEqual(s._meta, undefined);
-    assert.ok(s.url.startsWith('magnet:'));
+    assert.strictEqual(s.url, undefined);
+    assert.match(s.infoHash, /^[0-9a-f]{40}$/);
+    assert.ok(Array.isArray(s.sources) && s.sources.some(src => src.startsWith('tracker:')));
+    assert.ok(s.sources.includes(`dht:${s.infoHash}`));
     assert.ok(s.name && s.title);
   }
   // No se mutan los originales

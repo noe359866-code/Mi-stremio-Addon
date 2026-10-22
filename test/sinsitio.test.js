@@ -337,28 +337,28 @@ test('UniverTorrent, SinSitio y Beamup: manifest sin nombres de proveedores, con
   const filtered = aplicarConfig(sampleStreams, normalizarConfig(undefined));
   assert.equal(filtered.length, 1);
 
-  // 3) Manifest se llama UniverTorrent, no expone nombres de proveedores y tiene catálogos limpios
+  // 3) Manifest se llama UniverTorrent, entrega SOLO streams de Torrents (sin catálogos) y no expone nombres de proveedores
   assert.equal(manifest.name, 'UniverTorrent');
   assert.equal(manifest.id, 'com.univertorrent.addon');
+  assert.deepEqual(manifest.resources, ['stream']);
+  assert.deepEqual(manifest.catalogs, []);
+  assert.deepEqual(manifest.idPrefixes, ['tt', 'kitsu']);
+  assert.equal(manifest.behaviorHints.p2p, true);
   const rawManifestText = JSON.stringify(manifest).toLowerCase();
   for (const proveedor of ['hacktorrent', 'pelispanda', 'sinsitio', 'knaben', 'torrents.csv', 'blackholebay', 'black hole bay']) {
     assert.ok(!rawManifestText.includes(proveedor), `manifest.json no debe mostrar el proveedor "${proveedor}"`);
   }
 
-  const catIds = manifest.catalogs.map(c => c.id);
-  assert.ok(catIds.includes('univertorrent-cine-esp'));
-  assert.ok(catIds.includes('univertorrent-series-esp'));
-  assert.ok(manifest.idPrefixes.includes('ss'));
-
-  // 4) Subdominio baby-beamup.club configurado en beamup.json y en /configure (sin nombres de proveedores)
-  assert.match(BEAMUP_HOST, /\.baby-beamup\.club$/);
-  assert.equal(beamupConfig.subdomain, BEAMUP_HOST);
-  assert.equal(beamupConfig.manifestUrl, `${BEAMUP_ORIGIN}/manifest.json`);
+  // 4) Sin subdominio baby-beamup.club inexistente quemado por defecto ni nombres de proveedores
+  assert.equal(BEAMUP_HOST, '');
+  assert.equal(BEAMUP_ORIGIN, '');
+  assert.equal(beamupConfig.projectName, 'mi-stremio-addon');
+  assert.ok(!JSON.stringify(beamupConfig).includes('baby-beamup.club'));
 
   const html = renderConfigPage({ config: {}, manifest });
   assert.ok(html.includes('UniverTorrent'));
   assert.ok(html.includes('name="fuente" value="ss"'));
-  assert.ok(html.includes(BEAMUP_HOST));
+  assert.ok(!html.includes('baby-beamup.club'), '/configure no debe anunciar un subdominio baby-beamup.club inexistente');
   assert.ok(html.includes('data-ui="es"'));
   assert.ok(html.includes('data-ui="en"'));
   const visibleText = html

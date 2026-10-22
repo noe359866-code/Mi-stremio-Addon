@@ -1,12 +1,18 @@
-# HackTorrent - Stremio Addon
+# UniverTorrent - Stremio Addon (Solo Streams de Torrents · Sin Catálogos)
 
-Addon de Stremio que provee **catálogos** y **streams** desde [https://hacktorrent.cc/](https://hacktorrent.cc/) utilizando Web Scraping con **Axios** y **Cheerio**.
+Addon de Stremio estilo **Torrentio** que entrega **únicamente streams de Torrents nativos** (`infoHash` + `sources` trackers/DHT + `fileIdx`), **sin añadir catálogos** al inicio ni a Discover en Stremio.
 
 Soporta:
-- 🎬 **Películas** (movie) - catálogo de novedades + búsqueda
-- 📺 **Series** (series) - catálogo de series + episodios individuales
-- 🍥 **Anime** (series) - catálogo de anime + ids `kitsu:`
-- Streams vía **magnet links** con calidad `4K HDR`, `1080p`, `720p`, `DVDRip` y audio `Latino / Castellano / Inglés`
+- 🎬 **Películas** (`movie` · `tt...`)
+- 📺 **Series** (`series` · `tt...:temporada:episodio`)
+- 🍥 **Anime** (`anime` / `series` · `kitsu:...` y `tt...`)
+- 🧲 **Torrents nativos de Stremio** (`infoHash` SHA-1 + `sources` trackers/DHT + `fileIdx`) en **Español (Latino, Castellano y Dual)** e **Inglés (VO)** en `4K`, `1080p` y `720p`
+
+> **v1.7.0** — Modo **Solo Torrents (sin catálogos)** + **Configuración y Resiliencia Universal**:
+> - `manifest.json` expone únicamente `"resources": ["stream"]` con `"catalogs": []` e `"idPrefixes": ["tt", "kitsu"]`, y entrega objetos `stream` nativos de Torrent de Stremio (`infoHash` + `sources` trackers/DHT + `fileIdx`, sin `url: "magnet:..."`).
+> - CORS `Access-Control-Allow-Origin: *` habilitado en **todas** las rutas (`/manifest.json`, `/es/manifest.json`, `/en/manifest.json`, `/{config}/manifest.json`, `/{config}/stream/...` y `OPTIONS`).
+> - Soporte completo de reconfiguración en `/{config}/configure` (botón ⚙️ de Stremio), copia con respaldo en iframes/WebViews y botón directo **Instalar en Stremio Web** (`web.stremio.com`).
+> - Aislamiento por fuente en paralelo (`ADDON_SOURCE_TIMEOUT_MS`) para que un sitio lento o bloqueado jamás impida entregar los streams ya encontrados por los demás servidores, y activación directa de `tbb` desde `/configure`.
 
 > **v1.5.0** — Despliegue en **Netlify Functions** (serverless, sin el "sleep" de Render):
 > `netlify.toml` + `netlify/functions/addon.js`. Ver [Despliegue en Netlify](#-despliegue-en-netlify-v150).
@@ -58,13 +64,11 @@ hacktorrent-stremio-addon/
 ```
 
 ### `manifest.json`
-- `resources`: `["catalog", "stream", "meta"]`
-- `types`: `["movie", "series"]`
-- `idPrefixes`: `["tt", "ht"]` (IMDb ID + hacktorrent slug)
-- 2 catálogos:
-  - `hacktorrent-peliculas` (type: movie)
-  - `hacktorrent-series` (type: series)
-  - Ambos soportan `extra: search` y `skip` (paginación)
+- `resources`: `["stream"]`
+- `types`: `["movie", "series", "anime"]`
+- `catalogs`: `[]` *(sin catálogos)*
+- `idPrefixes`: `["tt", "kitsu"]` (IMDb ID + Kitsu ID)
+- `behaviorHints`: `{ "p2p": true, "configurable": true, "configurationRequired": false }`
 
 ---
 

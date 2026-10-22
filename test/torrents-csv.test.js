@@ -45,7 +45,8 @@ test('consulta la API Torrents.csv y filtra películas por año antes de crear s
   assert.ok(Number(params.get('size')) >= 10);
   assert.deepEqual(streams.map(stream => stream.infoHash), [HASH_2012]);
   assert.match(streams[0].name, /^Torrents\.csv/);
-  assert.match(streams[0].url, /btih:a{40}/);
+  assert.equal(streams[0].url, undefined);
+  assert.ok(streams[0].sources.includes(`dht:${HASH_2012}`));
   assert.ok(streams[0]._meta.seeders === 23);
 });
 

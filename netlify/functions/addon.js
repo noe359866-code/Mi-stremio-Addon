@@ -28,6 +28,17 @@
 
 'use strict';
 
+// En Netlify Functions (`[build.environment]` no siempre llega al runtime Lambda),
+// garantizamos topes por petición y por fuente ANTES de cargar los scrapers,
+// evitando que un solo dominio lento o bloqueado consuma los 10 s de la función
+// y descarte los streams ya encontrados por las fuentes rápidas.
+if (!process.env.ADDON_HTTP_TIMEOUT_MS) {
+  process.env.ADDON_HTTP_TIMEOUT_MS = '4500';
+}
+if (!process.env.ADDON_SOURCE_TIMEOUT_MS) {
+  process.env.ADDON_SOURCE_TIMEOUT_MS = '6500';
+}
+
 const serverless = require('serverless-http');
 const addonInterface = require('../../index');
 const { createApp } = require('../../lib/server');
@@ -40,9 +51,9 @@ function entero(valor, porDefecto) {
 // 1 h por defecto: el CDN de Netlify cachea las respuestas .json del addon.
 const CACHE_SEGUNDOS = entero(process.env.ADDON_CACHE_MAX_AGE, 60 * 60);
 
-// Presupuesto por petición. El plan gratuito de Netlify corta a los 10 s en
-// cuentas antiguas, así que dejamos 1 s de margen para contestar con dignidad.
-const PRESUPUESTO_MS = entero(process.env.NETLIFY_ADDON_DEADLINE_MS, 9000);
+// Presupuesto por petición. El plan gratuito de Netlify corta a los 10 s,
+// así que dejamos margen suficiente tras `ADDON_SOURCE_TIMEOUT_MS` (6.5 s).
+const PRESUPUESTO_MS = entero(process.env.NETLIFY_ADDON_DEADLINE_MS, 9200);
 
 const app = createApp(addonInterface, { cacheMaxAge: CACHE_SEGUNDOS });
 const lambda = serverless(app);

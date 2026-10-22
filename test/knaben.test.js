@@ -102,8 +102,9 @@ test('película: filtra por año, categoría y título; ignora audios y series',
 
   const streams = await Knaben.buscarStreams({ title: 'The Avengers', year: '2012', type: 'movie' });
   assert.strictEqual(streams.length, 1);
-  assert.ok(streams[0].url.includes(YIFY));
+  assert.strictEqual(streams[0].url, undefined);
   assert.strictEqual(streams[0].infoHash, YIFY.toLowerCase());
+  assert.ok(streams[0].sources.includes(`dht:${YIFY.toLowerCase()}`));
   assert.ok(streams[0].title.includes('YIFY'));
   assert.ok(streams[0].name.startsWith('Knaben'));
   assert.ok(streams[0].title.includes('Inglés'));
@@ -117,15 +118,17 @@ test('película: sin magnet ni hash no se devuelve nada', async () => {
   assert.deepStrictEqual(streams, []);
 });
 
-test('película: si sólo hay hits de hash, construye el magnet con trackers', async () => {
+test('película: si sólo hay hits de hash, construye el stream Torrent con infoHash y trackers', async () => {
   const HASH = 'F'.repeat(40);
   stubKnaben({
     'The Avengers': [hit({ title: 'The Avengers 2012 1080p BluRay', hash: HASH, magnet: null })]
   });
   const streams = await Knaben.buscarStreams({ title: 'The Avengers', year: '2012', type: 'movie' });
   assert.strictEqual(streams.length, 1);
-  assert.ok(streams[0].url.startsWith('magnet:?xt=urn:btih:' + HASH));
-  assert.ok(streams[0].url.includes('tr='));
+  assert.strictEqual(streams[0].url, undefined);
+  assert.strictEqual(streams[0].infoHash, HASH.toLowerCase());
+  assert.ok(streams[0].sources.some(s => s.startsWith('tracker:')));
+  assert.ok(streams[0].sources.includes(`dht:${HASH.toLowerCase()}`));
 });
 
 // ------------------------- búsqueda de series -------------------------
@@ -198,12 +201,12 @@ test('si Knaben falla, devuelve [] y no rompe', async () => {
 test('fusiona resultados de HackTorrent + Knaben sin duplicar infoHash', () => {
   const { fusionarStreams } = require('../index')._internals;
   const ht = [
-    { name: 'HackTorrent\n1080p', url: 'magnet:?xt=urn:btih:AAA', infoHash: 'aaa' },
-    { name: 'HackTorrent\n720p', url: 'magnet:?xt=urn:btih:BBB' }
+    { name: 'HackTorrent\n1080p', infoHash: 'a'.repeat(40) },
+    { name: 'HackTorrent\n720p', infoHash: 'b'.repeat(40) }
   ];
   const knaben = [
-    { name: 'Knaben\n1080p', url: 'magnet:?xt=urn:btih:AAA', infoHash: 'aaa' },
-    { name: 'Knaben\n4K', url: 'magnet:?xt=urn:btih:CCC', infoHash: 'ccc' }
+    { name: 'Knaben\n1080p', infoHash: 'a'.repeat(40) },
+    { name: 'Knaben\n4K', infoHash: 'c'.repeat(40) }
   ];
   const fusion = fusionarStreams(ht, knaben);
   assert.strictEqual(fusion.length, 3);
