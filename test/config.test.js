@@ -23,7 +23,7 @@ test('config por defecto: todo lo razonable activado', () => {
   const cfg = normalizarConfig(undefined);
   assert.deepStrictEqual(cfg, DEFAULTS);
   assert.strictEqual(cfg.idioma, 'ambos');
-  assert.strictEqual(cfg.fuentes, 'ht,knaben');
+  assert.strictEqual(cfg.fuentes, 'ht,knaben,tcsv');
   assert.strictEqual(cfg.packs, true);
 });
 
@@ -66,7 +66,7 @@ test('construirUrlManifest genera la URL del protocolo de configuración', () =>
   // Sin config → manifest pelado
   assert.strictEqual(construirUrlManifest(DEFAULTS, 'https://addon.test/'), 'https://addon.test/manifest.json');
 
-  const url = construirUrlManifest({ idioma: 'latino', fuentes: 'ht,knaben' }, 'https://addon.test');
+  const url = construirUrlManifest({ idioma: 'latino', fuentes: 'ht,knaben,tcsv' }, 'https://addon.test');
   assert.ok(url.startsWith('https://addon.test/%7B'), url);
   assert.ok(url.endsWith('/manifest.json'));
   const segmento = decodeURIComponent(url.replace('https://addon.test/', '').replace('/manifest.json', ''));
@@ -76,6 +76,7 @@ test('construirUrlManifest genera la URL del protocolo de configuración', () =>
 test('fuentesActivas normaliza alias', () => {
   assert.deepStrictEqual([...fuentesActivas({ fuentes: 'ht,tbb' })], ['ht', 'tbb']);
   assert.deepStrictEqual([...fuentesActivas({ fuentes: ['hacktorrent', 'knaben'] })], ['ht', 'knaben']);
+  assert.deepStrictEqual([...fuentesActivas({ fuentes: 'torrents-csv' })], ['tcsv']);
   assert.deepStrictEqual([...fuentesActivas({ fuentes: { ht: true, tbb: false } })], ['ht']);
 });
 
@@ -147,6 +148,11 @@ test('fuentes: se pueden desactivar Knaben o HackTorrent', () => {
     nombres(aplicarConfig(MUESTRA, { fuentes: 'ht,knaben,tbb', idioma: 'ambos' })).length,
     5
   );
+});
+
+test('fuente Torrents.csv se conserva y se puede activar por configuración', () => {
+  const torrentCsv = stream({ fuente: 'tcsv', idioma: 'Inglés', nombre: 'TCSV-1080' });
+  assert.deepStrictEqual(nombres(aplicarConfig([torrentCsv], { fuentes: 'tcsv' })), ['TCSV-1080']);
 });
 
 test('calidad mínima filtra por debajo', () => {

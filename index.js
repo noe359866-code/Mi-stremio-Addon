@@ -15,6 +15,7 @@ const Scraper = require('./lib/scraper');
 const HT = require('./lib/hacktorrent');
 const Knaben = require('./lib/knaben');
 const BlackHoleBay = require('./lib/theblackholebay');
+const TorrentsCsv = require('./lib/torrentsCsv');
 const { normalizarConfig, aplicarConfig, fuentesActivas } = require('./lib/config');
 const { timeout } = require('./lib/timeouts');
 const {
@@ -182,7 +183,8 @@ async function buscarEnFuentesExternas({ title, originalTitle, year, type, seaso
   const activas = fuentesActivas(config);
   const fuentes = [
     { clave: 'knaben', nombre: 'Knaben', fn: Knaben.buscarStreams },
-    { clave: 'tbb', nombre: 'BlackHoleBay', fn: BlackHoleBay.buscarStreams }
+    { clave: 'tbb', nombre: 'BlackHoleBay', fn: BlackHoleBay.buscarStreams },
+    { clave: 'tcsv', nombre: 'Torrents.csv', fn: TorrentsCsv.buscarStreams }
   ].filter(f => activas.has(f.clave));
 
   if (fuentes.length === 0) return [];
@@ -811,7 +813,7 @@ if (require.main === module) {
     console.log(`   Configuración: /configure`);
     console.log(`   Manifest:      /manifest.json`);
     console.log(`   Catálogos:     ${manifest.catalogs.map(c => c.name).join(', ')}`);
-    console.log(`   Fuentes:       HackTorrent (Latino) + Knaben${BlackHoleBay.BLACKHOLEBAY_ENABLED ? ' + Black Hole Bay' : ' (Black Hole Bay opcional)'}`);
+    console.log(`   Fuentes:       HackTorrent (Latino) + Knaben + Torrents.csv${BlackHoleBay.BLACKHOLEBAY_ENABLED ? ' + Black Hole Bay' : ' (Black Hole Bay opcional)'}`);
   });
 
   const apagar = () => server.close(() => process.exit(0));

@@ -2,7 +2,7 @@
   "id": "com.hacktorrent.addon",
   "version": "1.5.0",
   "name": "HackTorrent",
-  "description": "Catálogos y streams de películas, series y anime: HackTorrent.cc (Latino/Dual) y fuentes en inglés (Knaben; The Black Hole Bay opcional). Empareja por título, título original, año, tipo y episodio exacto para evitar torrents equivocados.",
+  "description": "Catálogos y streams de películas, series y anime: HackTorrent.cc (Latino/Dual), Knaben, Torrents.csv y The Black Hole Bay opcional. Empareja por título, año y episodio exacto para evitar torrents equivocados.",
   "logo": "https://i.imgur.com/8N987Z7.png",
   "background": "https://image.tmdb.org/t/p/original//9BBTo63ANSmhC4e6r62OJFuK2GL.jpg",
   "resources": [
@@ -101,15 +101,24 @@
     {
       "key": "fuentes",
       "type": "select",
-      "title": "Fuentes (ht,knaben,tbb)",
-      "default": "ht,knaben",
+      "title": "Fuentes (ht,knaben,tbb,tcsv)",
+      "default": "ht,knaben,tcsv",
       "options": [
         "ht",
-        "ht,knaben",
-        "ht,knaben,tbb",
-        "ht,tbb",
         "knaben",
-        "tbb"
+        "tbb",
+        "tcsv",
+        "ht,knaben",
+        "ht,tbb",
+        "ht,tcsv",
+        "knaben,tbb",
+        "knaben,tcsv",
+        "tbb,tcsv",
+        "ht,knaben,tbb",
+        "ht,knaben,tcsv",
+        "ht,tbb,tcsv",
+        "knaben,tbb,tcsv",
+        "ht,knaben,tbb,tcsv"
       ]
     },
     {
