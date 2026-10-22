@@ -305,30 +305,11 @@ test('PelisPanda: extraerDetalleTorrent de serie fusiona wpreact/v1/serie con HT
   }
 });
 
-test('PelisPanda + Addon: flujo completo de catálogo pp:, meta pp: y stream con fuente PelisPanda', async () => {
+test('PelisPanda + Addon: entrega únicamente streams de Torrents (sin catálogos ni meta)', async () => {
   PelisPanda._clearCaches();
   const origGet = axios.get;
 
   axios.get = mockHttp([
-    [
-      'https://pelispanda.org/wp-json/wpreact/v1/movies?page=1',
-      {
-        movies: [
-          {
-            ID: 16556,
-            name: 'Masterplan',
-            original_title: 'Masterplan',
-            slug: 'masterplan',
-            type: 'movie',
-            featured: 'https://image.tmdb.org/t/p/w300/masterplan.jpg',
-            background_image: 'https://image.tmdb.org/t/p/original/',
-            year: '2026',
-            imdb: '0',
-            genres: 'Acción, Comedia'
-          }
-        ]
-      }
-    ],
     [
       'https://pelispanda.org/wp-json/wpreact/v1/movie/masterplan',
       {
@@ -357,25 +338,19 @@ test('PelisPanda + Addon: flujo completo de catálogo pp:, meta pp: y stream con
   ]);
 
   try {
-    // 1. Catálogo PelisPanda
-    const catRes = await addonInterface.get('catalog', 'movie', 'pelispanda-peliculas');
-    assert.strictEqual(catRes.metas.length, 1);
-    assert.strictEqual(catRes.metas[0].id, 'pp:masterplan');
-    assert.strictEqual(catRes.metas[0].name, 'Masterplan');
+    // 1. El addon NO expone catálogos ni meta
+    await assert.rejects(() => addonInterface.get('catalog', 'movie', 'pelispanda-peliculas'), { noHandler: true });
+    await assert.rejects(() => addonInterface.get('meta', 'movie', 'pp:masterplan'), { noHandler: true });
 
-    // 2. Meta PelisPanda
-    const metaRes = await addonInterface.get('meta', 'movie', 'pp:masterplan');
-    assert.ok(metaRes.meta);
-    assert.strictEqual(metaRes.meta.id, 'pp:masterplan');
-    assert.strictEqual(metaRes.meta.name, 'Masterplan');
-
-    // 3. Stream PelisPanda por ID pp:masterplan
+    // 2. Stream PelisPanda devuelve Torrent nativo (infoHash + sources, sin url)
     const streamRes = await addonInterface.get('stream', 'movie', 'pp:masterplan');
     assert.strictEqual(streamRes.streams.length, 1);
     assert.ok(streamRes.streams[0].name.includes('PelisPanda'));
     assert.strictEqual(streamRes.streams[0].infoHash, 'dc49a9a6174208be31a09ccbaed412894eabbaef');
+    assert.strictEqual(streamRes.streams[0].url, undefined);
+    assert.ok(Array.isArray(streamRes.streams[0].sources));
 
-    // 4. Filtro de configuración con fuentes='pp'
+    // 3. Filtro de configuración con fuentes='pp'
     const filtrados = aplicarConfig(
       [
         PelisPanda.torrentToStream({
@@ -388,6 +363,8 @@ test('PelisPanda + Addon: flujo completo de catálogo pp:, meta pp: y stream con
       { fuentes: 'pp', idioma: 'latino' }
     );
     assert.strictEqual(filtrados.length, 1);
+    assert.strictEqual(filtrados[0].infoHash, 'dc49a9a6174208be31a09ccbaed412894eabbaef');
+    assert.strictEqual(filtrados[0].url, undefined);
   } finally {
     axios.get = origGet;
   }

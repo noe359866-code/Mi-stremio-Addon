@@ -219,7 +219,13 @@ const addon = require('../index');
 test.after(() => { axios.get = axiosGetOriginal; });
 
 function hashes(streams) {
-  return streams.map(s => (s.url.match(/btih:([a-zA-Z0-9]+)/) || [])[1]);
+  for (const s of streams) {
+    assert.strictEqual(s.url, undefined, 'los streams de Torrent no deben llevar url magnet para no romper StreamSource::Torrent');
+    assert.strictEqual(s.externalUrl, undefined);
+    assert.match(s.infoHash, /^[0-9a-f]{40}$/);
+    assert.ok(Array.isArray(s.sources) && s.sources.includes(`dht:${s.infoHash}`));
+  }
+  return streams.map(s => s.infoHash);
 }
 
 test('película: elige la de 2012 y no las secuelas ni la serie homónima', async () => {
@@ -231,13 +237,13 @@ test('película: elige la de 2012 y no las secuelas ni la serie homónima', asyn
 
   // Knaben añade el release en inglés, sin duplicar el de HackTorrent
   assert.strictEqual(streams.length, 2);
-  assert.ok(streams.some(s => s.name.startsWith('Knaben') && s.url.includes('f'.repeat(40))));
+  assert.ok(streams.some(s => s.name.startsWith('Knaben') && s.infoHash === 'f'.repeat(40)));
   assert.strictEqual(new Set(hs).size, hs.length, 'sin infoHash duplicados');
 });
 
 test('película: Knaben tampoco cuela la secuela (filtro de año)', async () => {
   const { streams } = await addon.get('stream', 'movie', 'tt0848228');
-  assert.ok(!streams.some(s => s.name.startsWith('Knaben') && s.url.includes('1'.repeat(40))));
+  assert.ok(!streams.some(s => s.name.startsWith('Knaben') && s.infoHash === '1'.repeat(40)));
 });
 
 test('serie: devuelve SOLO el episodio pedido (S02E05) de ambas fuentes', async () => {
@@ -282,7 +288,8 @@ test('serie: si no hay episodio exacto usa el pack de ESA temporada (y sólo de 
 test('película: acepta películas de anime catalogadas como anime', async () => {
   const { streams } = await addon.get('stream', 'movie', 'tt0090605');
   assert.strictEqual(streams.length, 1);
-  assert.ok(streams[0].url.includes('abababab'));
+  assert.strictEqual(streams[0].infoHash, 'ab'.repeat(20));
+  assert.strictEqual(streams[0].url, undefined);
 });
 
 test('película: NO acepta una serie de anime con el mismo nombre', async () => {
@@ -290,10 +297,14 @@ test('película: NO acepta una serie de anime con el mismo nombre', async () => 
   assert.deepStrictEqual(streams, []);
 });
 
-test('anime vía kitsu: sólo el episodio solicitado', async () => {
+test('anime vía kitsu: sólo el episodio solicitado (tanto en series como en anime)', async () => {
   const { streams } = await addon.get('stream', 'series', 'kitsu:123:1:3');
   assert.strictEqual(streams.length, 1);
   assert.deepStrictEqual(hashes(streams), [H.naruto03]);
+
+  const { streams: streamsAnime } = await addon.get('stream', 'anime', 'kitsu:123:3');
+  assert.strictEqual(streamsAnime.length, 1);
+  assert.deepStrictEqual(hashes(streamsAnime), [H.naruto03]);
 });
 
 test('id propio ht: respeta temporada/episodio y suma Knaben sin duplicar', async () => {
@@ -305,11 +316,15 @@ test('id propio ht: respeta temporada/episodio y suma Knaben sin duplicar', asyn
   assert.strictEqual(hs[0], H.bb0205, 'HackTorrent primero');
 });
 
-test('búsqueda de catálogo filtra por tipo (películas no traen series)', async () => {
-  const { metas } = await addon.get('catalog', 'movie', 'hacktorrent-peliculas', { search: 'The Avengers' });
-  assert.ok(metas.length >= 1);
-  assert.ok(metas.every(m => m.type === 'movie'));
-  assert.ok(!metas.some(m => (m.name || '').includes('1961')));
+test('el addon NO entrega catálogos ni fichas meta: únicamente Torrents (stream)', async () => {
+  await assert.rejects(
+    () => addon.get('catalog', 'movie', 'univertorrent-peliculas'),
+    { noHandler: true }
+  );
+  await assert.rejects(
+    () => addon.get('meta', 'movie', 'tt0848228'),
+    { noHandler: true }
+  );
 });
 
 // ------------------- configuración del usuario (página web) -------------------

@@ -1,7 +1,7 @@
 {
   "name": "univertorrent-stremio-addon",
-  "version": "1.6.0",
-  "description": "UniverTorrent Stremio Addon - Catálogos y streams universales para películas, series y anime en Español (Latino, Castellano y Dual) e Inglés (VO)",
+  "version": "1.7.0",
+  "description": "UniverTorrent Stremio Addon - Streams de torrents universales para películas, series y anime en Español (Latino, Castellano y Dual) e Inglés (VO). Sin catálogos.",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
@@ -13,8 +13,7 @@
     "addon",
     "univertorrent",
     "torrent",
-    "stream",
-    "catalog"
+    "stream"
   ],
   "author": "",
   "license": "MIT",

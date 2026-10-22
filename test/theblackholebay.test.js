@@ -146,9 +146,10 @@ test('acepta info_hash sin magnet y lo completa con trackers', async () => {
   }));
   const streams = await TBB.buscarStreams({ title: 'The Avengers', year: '2012', type: 'movie' });
   assert.strictEqual(streams.length, 1);
-  assert.ok(streams[0].url.startsWith('magnet:?xt=urn:btih:' + 'AB'.repeat(20)));
-  assert.ok(streams[0].url.includes('tr='));
+  assert.strictEqual(streams[0].url, undefined);
   assert.strictEqual(streams[0].infoHash, 'ab'.repeat(20));
+  assert.ok(streams[0].sources.some(s => s.startsWith('tracker:')));
+  assert.ok(streams[0].sources.includes('dht:' + 'ab'.repeat(20)));
 });
 
 test('fusiona las tres fuentes sin duplicar el mismo infoHash', async () => {

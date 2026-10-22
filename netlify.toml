@@ -17,11 +17,12 @@
 
 [build.environment]
   NODE_VERSION = "22"
-  # Netlify corta las funciones a los 10 s en cuentas antiguas: nos quedamos
-  # con margen tanto en las peticiones salientes como en el total.
-  ADDON_HTTP_TIMEOUT_MS = "8000"
-  NETLIFY_ADDON_DEADLINE_MS = "9000"
-  # 1 h de caché de CDN para catalogs/streams (más fresco que las 6 h locales).
+  # Netlify corta las funciones a los 10 s: limitamos cada petición saliente
+  # y cada fuente individual para responder siempre con los streams disponibles.
+  ADDON_HTTP_TIMEOUT_MS = "4500"
+  ADDON_SOURCE_TIMEOUT_MS = "6500"
+  NETLIFY_ADDON_DEADLINE_MS = "9200"
+  # 1 h de caché de CDN para streams.
   ADDON_CACHE_MAX_AGE = "3600"
 
 [functions]
