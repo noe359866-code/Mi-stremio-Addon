@@ -8,6 +8,8 @@ Soporta:
 - 🍥 **Anime** (series) - catálogo de anime + ids `kitsu:`
 - Streams vía **magnet links** con calidad `4K HDR`, `1080p`, `720p`, `DVDRip` y audio `Latino / Castellano / Inglés`
 
+> **v1.5.0** — Despliegue en **Netlify Functions** (serverless, sin el "sleep" de Render):
+> `netlify.toml` + `netlify/functions/addon.js`. Ver [Despliegue en Netlify](#-despliegue-en-netlify-v150).
 > **v1.4.0** — Página web de **configuración** (`/configure`): idioma, fuentes, calidad,
 > orden, packs y máximo de resultados. Ver [Configuración web](#-configuración-web-configure-v140).
 > Fuentes: **HackTorrent** (Latino), **Knaben** y **The Black Hole Bay** (opcional).
@@ -30,7 +32,13 @@ hacktorrent-stremio-addon/
 │   ├── config.js        # Configuración válida + filtros/orden de los streams
 │   ├── configPage.js    # Página HTML de /configure (sin dependencias)
 │   ├── server.js        # Express: /configure, /health y el router del SDK
+│   ├── timeouts.js      # Tope de timeouts HTTP (serverless)
 │   └── match.js         # Emparejamiento por título/título original/año/tipo
+├── netlify/
+│   └── functions/
+│       └── addon.js     # Función serverless (Express + serverless-http)
+├── netlify.toml         # Build, función y rewrite /* → /configure, /manifest.json…
+├── public/              # Placeholder de publish (el rewrite manda todo a la función)
 ├── test/                # Tests con node:test (sin red)
 └── README.md
 ```
@@ -177,7 +185,7 @@ npm start
 
 ### Instalar en Stremio (Desktop / Android / Web)
 1. Abre **Stremio** → Addons (puzzle icon) → **Addon URL** (arriba).
-2. Pega: `http://127.0.0.1:7000/manifest.json` (si local) o la URL desplegada (ej. `https://tu-dominio.vercel.app/manifest.json`).
+2. Pega: `http://127.0.0.1:7000/manifest.json` (si local) o la URL desplegada (ej. `https://tu-sitio.netlify.app/manifest.json`).
 3. Click **Install**.
 
 ### Probar catálogos
@@ -202,9 +210,106 @@ npm start
 
 > **Nota:** HackTorrent ya provee contenido en Latino con subs disponibles (`Subs ✅`), pero el addon de subtítulos te permite descargar subtítulos externos adicionales.
 
-### Despliegue opcional
-- **Vercel / Netlify**: haz `vercel --prod` o conecta repo a Netlify. Usa `index.js` como serverless function si lo prefieres.
-- **PORT**: Configura `PORT=7000` como variable de entorno si despliegas en contenedor.
+### Despliegue
+- **Netlify (recomendado)**: ver [Despliegue en Netlify](#-despliegue-en-netlify-v150). No se duerme.
+- **Render / VPS / Docker**: `npm start` con `PORT=7000`. En el plan gratuito de Render el
+  servicio se suspende tras ~15 min sin tráfico: la primera petición de Stremio tarda
+  decenas de segundos (o falla). Netlify no tiene ese problema.
+- **Vercel**: funciona igual, pero usa [`api/index.js`](api/index.js) si lo añades; el
+  adaptador de `netlify/functions/addon.js` sirve de referencia (es un evento distinto).
+
+---
+
+## ☁️ Despliegue en Netlify (v1.5.0)
+
+[![Deploy to Netlify](https://www.netlify.com/img/deploy/button.svg)](https://app.netlify.com/start/deploy?repository=https://github.com/noe359866-code/Mi-stremio-Addon)
+
+El addon corre como **una sola Netlify Function** (`netlify/functions/addon.js`) que envuelve
+el mismo Express de `lib/server.js` con [`serverless-http`](https://github.com/dougmoscrop/serverless-http).
+No hay proceso que se apague: Netlify sólo ejecuta la función cuando Stremio hace una petición.
+
+```
+https://TU-SITIO.netlify.app/configure            ← página de configuración
+https://TU-SITIO.netlify.app/manifest.json        ← instalar en Stremio
+https://TU-SITIO.netlify.app/health               ← estado
+https://TU-SITIO.netlify.app/{config}/stream/...  ← recursos del addon
+```
+
+Las URLs son **idénticas** a las de Render: el rewrite de `netlify.toml` manda todo
+(`/*`) a la función sin cambiar la ruta del navegador, así que las URLs ya instaladas
+en Stremio se pueden reutilizar cambiando sólo el dominio.
+
+### Pasos (desde GitHub, sin CLI)
+
+1. Sube este repo a GitHub (o haz fork).
+2. En Netlify: **Add new site → Import an existing project → GitHub** y elige el repo.
+3. Netlify lee `netlify.toml`: build `npm ci --omit=dev || npm install --omit=dev`,
+   publish `public`, functions `netlify/functions`. No cambies nada, sólo **Deploy**.
+4. Cuando termine, abre `https://TU-SITIO.netlify.app/configure`, elige idioma/fuentes y
+   pulsa **Instalar en Stremio** (o copia `https://TU-SITIO.netlify.app/manifest.json`).
+5. Comprueba que responde: `https://TU-SITIO.netlify.app/health` → `{ "ok": true, ... }`.
+
+> El nombre del sitio (`TU-SITIO`) se puede cambiar en **Site configuration → Change site name**;
+> también puedes usar un dominio propio. La página de configuración usa `location.origin`,
+> así que el enlace de instalación siempre apunta al dominio real.
+
+### Probar en local con Netlify
+
+```bash
+npm install
+npx netlify-cli dev        # equivale a: npm run dev:netlify
+# http://localhost:8888/configure  (usa el rewrite real de netlify.toml)
+```
+
+El `npm start` de siempre (puerto 7000) sigue funcionando para desarrollo sin Netlify;
+ambos caminos comparten `lib/server.js` y el mismo manifest.
+
+### Qué cambia respecto a Render
+
+| | Render (plan gratuito) | Netlify Functions |
+| --- | --- | --- |
+| Servicio dormido | Sí, ~15 min sin tráfico → arranque lento | No existe el "sleep" |
+| Primera petición | 30–60 s (o timeout de Stremio) | Arranque en frío de ~0.3–1 s |
+| Límite por petición | Sin límite práctico | 60 s (10 s en cuentas antiguas) |
+| Caché en memoria | Persistente entre peticiones | Por instancia (se pierde al reciclarse) |
+| Coste | Instancia siempre "reservada" | Cuota mensual de invocaciones |
+
+### Timeouts: cómo se respeta el límite de Netlify
+
+Una función serverless no puede quedarse colgada esperando a un scraper. Por eso:
+
+- `lib/timeouts.js` recorta **todas** las peticiones salientes con `ADDON_HTTP_TIMEOUT_MS`
+  (8 s en `netlify.toml`; en AWS Lambda el tope por defecto es 8000 ms).
+- `netlify/functions/addon.js` tiene un presupuesto total (`NETLIFY_ADDON_DEADLINE_MS`, 9 s).
+  Si se agota, responde **200 con la lista vacía** (`{ "streams": [] }`, `{ "metas": [] }`…)
+  en lugar de un 504: Stremio muestra "sin resultados" y el resto de addons sigue funcionando.
+- Las respuestas `.json` se cachean en el CDN de Netlify (`ADDON_CACHE_MAX_AGE`, 1 h).
+
+### Variables de entorno (Netlify → Site configuration → Environment variables)
+
+| Variable | Por defecto | Para qué |
+| --- | --- | --- |
+| `ADDON_HTTP_TIMEOUT_MS` | `8000` (Lambda) | tope de cada petición saliente (ms) |
+| `NETLIFY_ADDON_DEADLINE_MS` | `9000` | presupuesto total por invocación (ms) |
+| `ADDON_CACHE_MAX_AGE` | `3600` | segundos de caché CDN para catalog/stream/meta |
+| `KNABEN_TIMEOUT` | `9000` | timeout propio de Knaben (se recorta con el tope) |
+| `BLACKHOLEBAY_TIMEOUT` | `9000` | timeout propio de The Black Hole Bay |
+| `BLACKHOLEBAY_ENABLED` | `0` | activa la tercera fuente por defecto |
+| `HACKTORRENT_MOCK` | — | `1` para tests offline (nunca en producción) |
+
+Cambiar una variable requiere **redeploy** (Deploys → Trigger deploy → Clear cache and deploy site).
+
+### Problemas típicos en Netlify
+
+- **`/.netlify/functions/addon` en la URL**: el rewrite no se aplicó. Revisa que
+  `netlify.toml` esté en la raíz del repo y que el sitio se haya construido desde ese commit
+  (el addon funciona igual, pero las URLs de Stremio serán las largas).
+- **504 / timeout**: sube `ADDON_HTTP_TIMEOUT_MS` sólo si tu cuenta permite más de 10 s;
+  si no, mantén 8000 y desactiva fuentes lentas (Knaben/TBB) en `/configure`.
+- **"Page not found"**: publish está en `public/` y ese directorio debe existir (ya viene en
+  el repo). Si lo borras, Netlify falla el deploy con `Deploy directory 'public' does not exist`.
+- **Catálogo con datos viejos**: es el CDN. Baja `ADDON_CACHE_MAX_AGE` o haz
+  "Clear cache and deploy" después de cambiar el código.
 
 ---
 
@@ -237,7 +342,8 @@ Detalles de implementación:
   usa para filtrar/ordenar y **se elimina antes de responder** a Stremio.
 - Si el filtro de idioma o de calidad deja la lista vacía, se muestran todos los resultados
   (mejor VO que nada). Con los **packs** no hay excepción: si los desactivas, no aparecen.
-- `/health` devuelve `{ ok, name, version }` para Render/UptimeRobot.
+- `/health` devuelve `{ ok, name, version }` para Render/UptimeRobot (en Netlify no hace
+  falta un ping para mantenerlo despierto: no se duerme).
 - Ejemplos de URL:
 
 ```text
