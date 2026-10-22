@@ -18,7 +18,7 @@ test('la página contiene todos los controles de configuración', () => {
     assert.ok(html.includes(`name="idioma" value="${valor}"`), `falta la opción de idioma ${valor}`);
   }
   // Fuentes
-  for (const valor of ['ht', 'knaben', 'tbb']) {
+  for (const valor of ['ht', 'knaben', 'tbb', 'tcsv']) {
     assert.ok(html.includes(`name="fuente" value="${valor}"`), `falta la fuente ${valor}`);
   }
   // Calidad, orden y máximo

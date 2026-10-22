@@ -12,7 +12,7 @@ Soporta:
 > `netlify.toml` + `netlify/functions/addon.js`. Ver [Despliegue en Netlify](#-despliegue-en-netlify-v150).
 > **v1.4.0** — Página web de **configuración** (`/configure`): idioma, fuentes, calidad,
 > orden, packs y máximo de resultados. Ver [Configuración web](#-configuración-web-configure-v140).
-> Fuentes: **HackTorrent** (Latino), **Knaben** y **The Black Hole Bay** (opcional).
+> Fuentes: **HackTorrent** (Latino), **Knaben**, **Torrents.csv** y **The Black Hole Bay** (opcional).
 
 ---
 
@@ -27,6 +27,7 @@ hacktorrent-stremio-addon/
 │   ├── hacktorrent.js   # Catálogos (wpreact), Cinemeta, caché
 │   ├── scraper.js       # Búsqueda + detalle (magnet/calidad/temporada/episodio)
 │   ├── knaben.js        # Fuente en inglés: API pública v2 de Knaben
+│   ├── torrentsCsv.js   # Torrents.csv: índice comunitario con API JSON
 │   ├── theblackholebay.js # Fuente opcional: API REST de The Black Hole Bay
 │   ├── release.js       # Reglas compartidas de filtrado de releases externos
 │   ├── config.js        # Configuración válida + filtros/orden de los streams
@@ -328,7 +329,7 @@ La página (`/`) redirige a `/configure` y muestra:
 | Opción | Valores | Efecto |
 | --- | --- | --- |
 | **Idioma del audio** | `ambos` · `latino` · `ingles` | filtra los streams por idioma (`Latino/Inglés` o `Dual` cuentan para ambos) |
-| **Fuentes** | `ht` (HackTorrent) · `knaben` · `tbb` (Black Hole Bay) | desactiva las que no quieras; las consultas se hacen sólo a las activas |
+| **Fuentes** | `ht` · `knaben` · `tcsv` (Torrents.csv) · `tbb` (Black Hole Bay) | activa sólo las que quieras; se consultan únicamente las seleccionadas |
 | **Calidad mínima** | `cualquiera` · `720p` · `1080p` · `4k` | descarta calidad inferior |
 | **Orden** | `latino` · `seeders` · `calidad` | orden de la lista de streams |
 | **Máximo de resultados** | 10 / 20 / 25 / 40 / 60 | evita listas eternas |
@@ -357,20 +358,22 @@ Detalles de implementación:
 
 ---
 
-## 🌐 Fuentes externas en inglés: Knaben y The Black Hole Bay (v1.3.0)
+## 🌐 Fuentes de streams: HackTorrent, Knaben, Torrents.csv y Black Hole Bay
 
-Además de HackTorrent (Latino/Dual) el addon consulta indexadores en inglés. Todas las
-fuentes pasan por **las mismas reglas** de `lib/release.js` (título como frase, año, SxxExx),
-así que ninguna puede colar un torrent de otra película o de otro episodio.
+Además de HackTorrent (Latino/Dual), se pueden activar indexadores públicos adicionales.
+Todos pasan por las reglas compartidas de `lib/release.js` (título como frase, año y SxxExx),
+para evitar torrents de otra película o episodio.
 
 | Fuente | Estado | API | Aporta |
 | --- | --- | --- | --- |
-| **HackTorrent** | siempre | wpreact + HTML | Latino / Castellano / Dual (primero en la lista) |
-| **Knaben** | activa (`KNABEN_ENABLED=1`) | `GET api.knaben.org/v2/search` | ~30 trackers (TPB, 1337x, RuTracker, Nyaa, eztv…), magnets directos y seeders reales |
-| **The Black Hole Bay** | **desactivada** (`BLACKHOLEBAY_ENABLED=0`) | `GET theblackholebay.lol/api/search` | TPB + 1337x + YTS, su **crawler DHT** y subidas de usuarios |
+| **HackTorrent** | activa | wpreact + HTML | Latino / Castellano / Dual |
+| **Knaben** | activa (`KNABEN_ENABLED=1`) | `GET api.knaben.org/v2/search` | ~30 trackers y seeders reportados |
+| **Torrents.csv** | activa por defecto (se puede desactivar en `/configure`) | `GET torrents-csv.com/service/search` | Índice comunitario, resultados por nombre/infohash |
+| **The Black Hole Bay** | **desactivada** (`BLACKHOLEBAY_ENABLED=0`) | `GET theblackholebay.lol/api/search` | TPB + 1337x + YTS, crawler DHT y subidas de usuarios |
 
-Los resultados aparecen etiquetados (`Knaben` / `Black Hole Bay`), van **después** de los de
-HackTorrent y se deduplican por `infoHash` entre todas las fuentes.
+Torrents.csv está activada por defecto; se puede desactivar desde `/configure` o quitando `tcsv` de `fuentes`. Cada resultado
+se filtra por título, año y episodio antes de crear un magnet con trackers de respaldo. Las
+fuentes activas aparecen etiquetadas y se deduplican por `infoHash`.
 
 ### The Black Hole Bay (opcional)
 
@@ -408,6 +411,11 @@ Detalles verificados de su API ([docs](https://theblackholebay.lol/api)):
 | `KNABEN_PAGE_SIZE` | `60` | resultados pedidos a la API (máx. 150) |
 | `KNABEN_TIMEOUT` | `9000` | timeout en ms |
 | `KNABEN_MIN_INTERVAL_MS` | `400` | espaciado mínimo entre peticiones |
+| `TORRENTS_CSV_ENABLED` | `1` | `0` desactiva Torrents.csv a nivel de servidor |
+| `TORRENTS_CSV_API` | `https://torrents-csv.com` | URL base de la API |
+| `TORRENTS_CSV_LIMIT` | `15` | máximo de streams de esta fuente |
+| `TORRENTS_CSV_PAGE_SIZE` | `80` | resultados pedidos a la API (máx. 100) |
+| `TORRENTS_CSV_TIMEOUT` | `9000` | timeout en ms |
 | `BLACKHOLEBAY_ENABLED` | `0` | `1` activa The Black Hole Bay |
 | `BLACKHOLEBAY_API` | `https://theblackholebay.lol/api` | base de la API |
 | `BLACKHOLEBAY_LIMIT` | `10` | máximo de streams de esta fuente |
@@ -415,8 +423,9 @@ Detalles verificados de su API ([docs](https://theblackholebay.lol/api)):
 | `BLACKHOLEBAY_MAX_BYTES` | `8388608` | tamaño máximo de respuesta |
 | `BLACKHOLEBAY_MIN_INTERVAL_MS` | `300` | espaciado mínimo entre peticiones |
 
-> Las fuentes externas son contenido **en inglés (VO)**: se resuelven subtítulos con un addon
-> tipo OpenSubtitles. Si un título está en Latino, HackTorrent aparece siempre primero.
+> Knaben y The Black Hole Bay aportan sobre todo contenido **en inglés (VO)**; Torrents.csv
+> puede incluir varios idiomas, inferidos del nombre del release. Se pueden añadir subtítulos con
+> un addon tipo OpenSubtitles. HackTorrent aparece primero cuando hay resultados Latino.
 
 ---
 
