@@ -1,7 +1,7 @@
 /**
  * UniverTorrent Stremio Addon - Archivo Principal
  * Recurso exclusivo: stream (Torrents nativos de Stremio: infoHash + sources + fileIdx, SIN catálogos)
- * Scrapers: HackTorrent, PelisPanda, SinSitio, Knaben, Torrents.csv, BlackHoleBay
+ * Scrapers: HackTorrent, PelisPanda, SinSitio, DivxTotal, MejorTorrent, WolfTorrent, Knaben, Torrents.csv, BlackHoleBay
  * Matching: lib/match.js (título + título original + TMDB ID + año + tipo + temporada/episodio)
  */
 
@@ -15,6 +15,9 @@ const Scraper = require('./lib/scraper');
 const HT = require('./lib/hacktorrent');
 const PelisPanda = require('./lib/pelispanda');
 const SinSitio = require('./lib/sinsitio');
+const DivxTotal = require('./lib/divxtotal');
+const MejorTorrent = require('./lib/mejortorrent');
+const WolfTorrent = require('./lib/wolftorrent');
 const Knaben = require('./lib/knaben');
 const BlackHoleBay = require('./lib/theblackholebay');
 const TorrentsCsv = require('./lib/torrentsCsv');
@@ -33,22 +36,27 @@ const {
   rankCandidates,
   similarity,
   torrentSeasonEpisode,
+  torrentMatchesEpisode,
   normalizeTitle
 } = require('./lib/match');
+const {
+  withKeepAlive,
+  lruGet,
+  lruSet,
+  withSingleFlight
+} = require('./lib/http');
 
 const builder = new addonBuilder(manifest);
 
-// Caché simple para Cinemeta/Kitsu (evita repetir la misma consulta por episodio)
+// Caché LRU + deduplicación en vuelo para Cinemeta/Kitsu
 const META_CACHE = new Map();
+const META_IN_FLIGHT = new Map();
 function metaCacheGet(key) {
-  const hit = META_CACHE.get(key);
-  if (!hit) return null;
-  if (Date.now() > hit.exp) { META_CACHE.delete(key); return null; }
-  return hit.value;
+  const val = lruGet(META_CACHE, key);
+  return val === undefined ? null : val;
 }
 function metaCacheSet(key, value, ttl = 6 * 60 * 60 * 1000) {
-  if (META_CACHE.size > 500) META_CACHE.clear();
-  META_CACHE.set(key, { value, exp: Date.now() + ttl });
+  lruSet(META_CACHE, key, value, ttl, 500);
 }
 
 // ---------------------------------------------------------------------------
@@ -124,16 +132,42 @@ function torrentToStream(torrent, tituloFallback, extra = {}) {
  * Los de fuentes hispanas van primero; las fuentes en inglés completan sin duplicados.
  */
 function fusionarStreams(propios = [], externos = []) {
-  const vistos = new Set();
+  const porClave = new Map();
   const salida = [];
+
   for (const stream of [...propios, ...externos]) {
     if (!stream || (!stream.infoHash && !stream.url)) continue;
     const hash = R.extraerInfoHash(stream.infoHash) || R.extraerInfoHash(stream.url);
     const clave = hash || String(stream.url || '').trim();
-    if (!clave || vistos.has(clave)) continue;
-    vistos.add(clave);
-    salida.push(stream);
+    if (!clave) continue;
+
+    const existente = porClave.get(clave);
+    if (!existente) {
+      const clon = {
+        ...stream,
+        ...(Array.isArray(stream.sources) ? { sources: [...stream.sources] } : {}),
+        ...(stream._meta ? { _meta: { ...stream._meta } } : {})
+      };
+      porClave.set(clave, clon);
+      salida.push(clon);
+      continue;
+    }
+
+    // Consolidar trackers/DHT, fileIdx y seeders sin mutar el objeto de entrada
+    if (Array.isArray(stream.sources) && stream.sources.length > 0) {
+      const union = new Set([...(existente.sources || []), ...stream.sources]);
+      existente.sources = Array.from(union);
+    }
+    if (existente.fileIdx === undefined && Number.isInteger(stream.fileIdx) && stream.fileIdx >= 0) {
+      existente.fileIdx = stream.fileIdx;
+    }
+    const seedersNuevo = Number(stream._meta?.seeders) || 0;
+    const seedersActual = Number(existente._meta?.seeders) || 0;
+    if (seedersNuevo > seedersActual && existente._meta) {
+      existente._meta = { ...existente._meta, seeders: seedersNuevo };
+    }
   }
+
   return salida;
 }
 
@@ -201,6 +235,24 @@ async function buscarEnFuentesExternas({ title, originalTitle, altTitles, tmdbId
       nombre: 'SinSitio',
       fn: () => SinSitio.buscarStreams({ title, originalTitle, altTitles, tmdbId, year, type, season, episode }),
       activa: activas.has('ss') || permitirHispanasPorDefecto
+    },
+    {
+      clave: 'dt',
+      nombre: 'DivxTotal',
+      fn: () => DivxTotal.buscarStreams({ title, originalTitle, altTitles, tmdbId, year, type, season, episode }),
+      activa: activas.has('dt') || permitirHispanasPorDefecto
+    },
+    {
+      clave: 'mt',
+      nombre: 'MejorTorrent',
+      fn: () => MejorTorrent.buscarStreams({ title, originalTitle, altTitles, tmdbId, year, type, season, episode }),
+      activa: activas.has('mt') || permitirHispanasPorDefecto
+    },
+    {
+      clave: 'wt',
+      nombre: 'WolfTorrent',
+      fn: () => WolfTorrent.buscarStreams({ title, originalTitle, altTitles, tmdbId, year, type, season, episode }),
+      activa: activas.has('wt') || permitirHispanasPorDefecto
     },
     {
       clave: 'knaben',
@@ -271,6 +323,16 @@ function parseStremioId(id) {
     };
   }
 
+  if (/^(dt|mt|wt):/i.test(id)) {
+    const fuente = partes[0].toLowerCase();
+    return {
+      fuente,
+      slug: partes[1] || null,
+      season: partes.length >= 4 ? parseInt(partes[2], 10) : null,
+      episode: partes.length >= 4 ? parseInt(partes[3], 10) : null
+    };
+  }
+
   if (/^kitsu:/i.test(id)) {
     // Formatos habituales: kitsu:ID  |  kitsu:ID:EP  |  kitsu:ID:TEMP:EP
     if (partes.length >= 4) {
@@ -328,27 +390,31 @@ async function resolverInfo(type, req) {
     const key = `kitsu:${req.kitsuId}`;
     const cached = metaCacheGet(key);
     if (cached) return cached;
-    try {
-      const res = await axios.get(`https://kitsu.io/api/edge/anime/${encodeURIComponent(req.kitsuId)}`, {
-        timeout: timeout(10000),
-        headers: { Accept: 'application/vnd.api+json' }
-      });
-      const a = res.data?.data?.attributes || {};
-      const altTitles = [a.titles?.en, a.titles?.en_jp, a.titles?.ja_jp, ...(Array.isArray(a.abbreviatedTitles) ? a.abbreviatedTitles : [])].filter(Boolean);
-      const info = {
-        title: a.canonicalTitle || a.titles?.en || a.titles?.en_jp || null,
-        originalTitle: a.titles?.en_jp || a.titles?.ja_jp || null,
-        year: a.startDate ? String(a.startDate).slice(0, 4) : null,
-        tmdbId: null,
-        altTitles,
-        tipoForzado: 'anime'
-      };
-      if (info.title) metaCacheSet(key, info);
-      return info;
-    } catch (e) {
-      console.warn(`[Stream] Kitsu falló para ${req.kitsuId}:`, e.message);
-      return { title: null, originalTitle: null, year: null, tmdbId: null, altTitles: [], tipoForzado: 'anime' };
-    }
+    return withSingleFlight(META_IN_FLIGHT, key, async () => {
+      const fromCache = metaCacheGet(key);
+      if (fromCache) return fromCache;
+      try {
+        const res = await axios.get(`https://kitsu.io/api/edge/anime/${encodeURIComponent(req.kitsuId)}`, withKeepAlive({
+          timeout: timeout(10000),
+          headers: { Accept: 'application/vnd.api+json' }
+        }));
+        const a = res.data?.data?.attributes || {};
+        const altTitles = [a.titles?.en, a.titles?.en_jp, a.titles?.ja_jp, ...(Array.isArray(a.abbreviatedTitles) ? a.abbreviatedTitles : [])].filter(Boolean);
+        const info = {
+          title: a.canonicalTitle || a.titles?.en || a.titles?.en_jp || null,
+          originalTitle: a.titles?.en_jp || a.titles?.ja_jp || null,
+          year: a.startDate ? String(a.startDate).slice(0, 4) : null,
+          tmdbId: null,
+          altTitles,
+          tipoForzado: 'anime'
+        };
+        if (info.title) metaCacheSet(key, info);
+        return info;
+      } catch (e) {
+        console.warn(`[Stream] Kitsu falló para ${req.kitsuId}:`, e.message);
+        return { title: null, originalTitle: null, year: null, tmdbId: null, altTitles: [], tipoForzado: 'anime' };
+      }
+    });
   }
 
   return { title: null, originalTitle: null, year: null, tmdbId: null, altTitles: [] };
@@ -391,37 +457,25 @@ async function buscarCandidatos(info, tipoObjetivo) {
   const variantes = variantesDeBusqueda(info);
   const todos = new Map();
   const altTitles = Array.isArray(info.altTitles) ? [...info.altTitles] : [];
+  let tmdbConsultado = false;
 
-  for (const q of variantes) {
-    try {
-      const resultados = await Scraper.buscarEnHackTorrent(q, null);
-      for (const r of resultados || []) {
-        if (!r || !r.slug) continue;
-        if (!todos.has(r.slug)) todos.set(r.slug, r);
-      }
-    } catch (e) {
-      console.warn(`[Stream] Búsqueda "${q}" falló:`, e.message);
-    }
-    if (todos.size >= 8) break;
-  }
+  const evaluarLista = () => {
+    const arr = Array.from(todos.values());
+    return arr.length > 0
+      ? rankCandidates(arr, {
+        title: info.title,
+        originalTitle: info.originalTitle,
+        altTitles,
+        tmdbId: info.tmdbId,
+        year: info.year,
+        type: tipoObjetivo
+      })
+      : [];
+  };
 
-  let lista = Array.from(todos.values());
-  let ranked = lista.length > 0
-    ? rankCandidates(lista, {
-      title: info.title,
-      originalTitle: info.originalTitle,
-      altTitles,
-      tmdbId: info.tmdbId,
-      year: info.year,
-      type: tipoObjetivo
-    })
-    : [];
-
-  // Si tenemos tmdbId (de Cinemeta) y la búsqueda por título en inglés no dio
-  // coincidencia fuerte (p.ej. "The Wolf of Wall Street" -> "El lobo de Wall Street"),
-  // resolvemos el título exacto en español en HackTorrent usando /?tmdb={id}.
-  const mejorScoreInicial = ranked[0]?.score || 0;
-  if (info.tmdbId && mejorScoreInicial < 0.78 && typeof Scraper.buscarPorTmdb === 'function') {
+  const consultarTmdb = async () => {
+    if (tmdbConsultado || !info.tmdbId || typeof Scraper.buscarPorTmdb !== 'function') return;
+    tmdbConsultado = true;
     try {
       const porTmdb = await Scraper.buscarPorTmdb(info.tmdbId);
       for (const r of porTmdb || []) {
@@ -432,21 +486,44 @@ async function buscarCandidatos(info, tipoObjetivo) {
       }
       if (porTmdb && porTmdb.length > 0) {
         info.altTitles = altTitles;
-        lista = Array.from(todos.values());
-        ranked = rankCandidates(lista, {
-          title: info.title,
-          originalTitle: info.originalTitle,
-          altTitles,
-          tmdbId: info.tmdbId,
-          year: info.year,
-          type: tipoObjetivo
-        });
       }
     } catch (e) {
       console.warn(`[Stream] Búsqueda TMDB ${info.tmdbId} falló:`, e.message);
     }
+  };
+
+  for (let idx = 0; idx < variantes.length; idx++) {
+    const q = variantes[idx];
+    try {
+      const resultados = await Scraper.buscarEnHackTorrent(q, null);
+      for (const r of resultados || []) {
+        if (!r || !r.slug) continue;
+        if (!todos.has(r.slug)) todos.set(r.slug, r);
+      }
+    } catch (e) {
+      console.warn(`[Stream] Búsqueda "${q}" falló:`, e.message);
+    }
+
+    const rParcial = evaluarLista();
+    if (rParcial[0] && rParcial[0].score >= 0.78) break;
+
+    // Resolver por TMDB inmediatamente después de variantes[0] cuando el título inglés no dio match fuerte
+    if (idx === 0 && info.tmdbId) {
+      await consultarTmdb();
+      const rTmdb = evaluarLista();
+      if (rTmdb[0] && rTmdb[0].score >= 0.78) break;
+    }
+
+    if (todos.size >= 8) break;
   }
 
+  let ranked = evaluarLista();
+  if (!tmdbConsultado && info.tmdbId && (ranked[0]?.score || 0) < 0.78) {
+    await consultarTmdb();
+    ranked = evaluarLista();
+  }
+
+  const lista = Array.from(todos.values());
   if (lista.length === 0) return { ranked: [], variantes, lista: [] };
 
   return { ranked, variantes, lista };
@@ -494,10 +571,10 @@ function filtrarPorEpisodio(torrents, season, episode) {
   const packs = [];
 
   for (const t of torrents) {
-    const se = torrentSeasonEpisode(t);
-    if (se.season === season && se.episode === episode) {
+    const matchKind = torrentMatchesEpisode(t, season, episode);
+    if (matchKind === 'exact') {
       exactos.push(t);
-    } else if (se.season === season && (se.episode === null || se.episode === undefined) && se.isPack) {
+    } else if (matchKind === 'pack') {
       packs.push(t);
     }
   }
@@ -505,14 +582,17 @@ function filtrarPorEpisodio(torrents, season, episode) {
   return { exactos, packs };
 }
 
-/** Asegura que los torrents seleccionados tengan magnet resuelto si traían acortalink. */
+/** Asegura que los torrents seleccionados tengan magnet resuelto si traían acortalink o .torrent. */
 async function asegurarMagnets(torrents) {
   if (!Array.isArray(torrents) || torrents.length === 0) return [];
-  const necesitaResolucion = torrents.some(t => !t.magnet && !t.torrentUrl && (t.acortalink || t.acortarUrl));
+  const necesitaResolucion = torrents.some(t => !t.magnet && (t.acortalink || t.acortarUrl || t.torrentUrl));
   if (!necesitaResolucion || typeof Scraper.resolverMagnetsEnLote !== 'function') {
     return torrents;
   }
-  const normalizados = torrents.map(t => (t.acortalink ? t : { ...t, acortalink: t.acortarUrl }));
+  const normalizados = torrents.map(t => {
+    const urlPendiente = t.acortalink || t.acortarUrl || t.torrentUrl || null;
+    return t.acortalink ? t : { ...t, acortalink: urlPendiente };
+  });
   return Scraper.resolverMagnetsEnLote(normalizados);
 }
 
@@ -583,7 +663,7 @@ builder.defineStreamHandler(async ({ type, id, config }) => {
         const { exactos, packs } = filtrarPorEpisodio(detalle.torrents, season, episode);
         const elegidos = exactos.length > 0 ? exactos : packs;
         const esPack = exactos.length === 0 && packs.length > 0;
-        const resueltos = await PelisPanda.resolverMagnetsEnLote(elegidos);
+        const resueltos = await PelisPanda.resolverMagnetsEnLote(elegidos, { season, episode });
         const propios = resueltos
           .map(t => PelisPanda.torrentToStream(t, detalle.titulo, {
             titulo: detalle.titulo,
@@ -598,7 +678,7 @@ builder.defineStreamHandler(async ({ type, id, config }) => {
       const filtrados = !esSerie
         ? detalle.torrents.filter(t => {
           const se = torrentSeasonEpisode(t);
-          return se.season === null && se.episode === null;
+          return se.season === null && se.episode === null && !se.isPack;
         })
         : detalle.torrents;
       const resueltos = await PelisPanda.resolverMagnetsEnLote(filtrados);
@@ -658,6 +738,50 @@ builder.defineStreamHandler(async ({ type, id, config }) => {
       return responder(propios);
     }
 
+    // --- CASO A.4: ids propios dt:slug / mt:slug / wt:slug (DivxTotal / MejorTorrent / WolfTorrent) ---
+    if ((req.fuente === 'dt' || req.fuente === 'mt' || req.fuente === 'wt') && req.slug) {
+      const modMap = { dt: DivxTotal, mt: MejorTorrent, wt: WolfTorrent };
+      const mod = modMap[req.fuente];
+      const habilitada = activas.has(req.fuente) || !tieneFuentesExplicitas(config);
+      const detalle = habilitada ? await mod.extraerDetalleTorrent(req.slug) : null;
+
+      if (!detalle || !Array.isArray(detalle.torrents) || detalle.torrents.length === 0) {
+        return responder([]);
+      }
+
+      if (esSerie && season !== null && episode !== null) {
+        const { exactos, packs } = mod.filtrarPorEpisodio(detalle.torrents, season, episode);
+        const elegidos = exactos.length > 0 ? exactos : packs;
+        const esPack = exactos.length === 0 && packs.length > 0;
+        const resueltos = await mod.resolverMagnetsEnLote(elegidos, { season, episode, isMovie: false });
+        const propios = resueltos
+          .map(t => mod.torrentToStream(t, detalle.titulo, {
+            titulo: detalle.titulo,
+            season,
+            episode: esPack ? null : episode,
+            esPack
+          }))
+          .filter(Boolean);
+        return responder(propios);
+      }
+
+      const filtrados = !esSerie
+        ? detalle.torrents.filter(t => {
+          const se = torrentSeasonEpisode(t);
+          return se.season === null && se.episode === null && !se.isPack;
+        })
+        : detalle.torrents;
+      const resueltos = await mod.resolverMagnetsEnLote(filtrados, { isMovie: !esSerie });
+      const propios = resueltos
+        .map(t => mod.torrentToStream(t, detalle.titulo, {
+          titulo: detalle.titulo,
+          season: null,
+          episode: null
+        }))
+        .filter(Boolean);
+      return responder(propios);
+    }
+
     // --- CASO B: tt (Cinemeta) / kitsu / slug suelto ---
     if (req.fuente !== 'slug') {
       info = await resolverInfo(type, req);
@@ -671,6 +795,7 @@ builder.defineStreamHandler(async ({ type, id, config }) => {
     }
 
     const tipoObjetivo = esSerie ? 'series' : 'movie';
+    const tipoExternas = (type === 'anime' || info.tipoForzado === 'anime') ? 'anime' : tipoObjetivo;
     console.log(`[Stream] Objetivo: "${info.title}"${info.originalTitle ? ` / "${info.originalTitle}"` : ''} (${info.year || '?'}) → ${tipoObjetivo}`);
 
     // Fuentes adicionales (PelisPanda/SinSitio en Español + fuentes en Inglés) en paralelo
@@ -680,7 +805,7 @@ builder.defineStreamHandler(async ({ type, id, config }) => {
       altTitles: info.altTitles,
       tmdbId: info.tmdbId,
       year: info.year,
-      type: tipoObjetivo,
+      type: tipoExternas,
       season,
       episode,
       config
@@ -848,7 +973,7 @@ function streamsDeDetalle(detalle, { titulo, season, episode, esSerie }) {
   const filtrados = !esSerie
     ? torrents.filter(t => {
       const se = torrentSeasonEpisode(t);
-      return se.season === null && se.episode === null;
+      return se.season === null && se.episode === null && !se.isPack;
     })
     : torrents;
 

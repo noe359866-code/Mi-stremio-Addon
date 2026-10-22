@@ -1,6 +1,6 @@
 {
   "id": "com.univertorrent.addon",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "name": "UniverTorrent",
   "description": "Streams de torrents para películas, series y anime en Español (Latino, Castellano y Dual) e Inglés (VO) en HD, 1080p y 4K. Sin catálogos.",
   "logo": "https://i.imgur.com/8N987Z7.png",
@@ -58,6 +58,9 @@
         "es1",
         "es2",
         "es3",
+        "es4",
+        "es5",
+        "es6",
         "en1",
         "en2",
         "en3"
