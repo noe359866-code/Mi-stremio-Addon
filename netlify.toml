@@ -1,0 +1,47 @@
+# netlify.toml
+# ---------------------------------------------------------------------------
+# Despliegue del addon en Netlify (funciones serverless, sin "sleep").
+#
+#   - netlify/functions/addon.js  → una única función que atiende TODO
+#     (Express + stremio-addon-sdk vía serverless-http).
+#   - El rewrite de abajo hace que /configure, /manifest.json, /health y
+#     /{config}/stream/... sigan viviendo en la raíz del dominio, así que las
+#     URLs del addon son idénticas a las de Render.
+#   - public/ es sólo un placeholder de publish (el rewrite se come todo).
+# ---------------------------------------------------------------------------
+
+[build]
+  command = "npm ci --omit=dev || npm install --omit=dev"
+  publish = "public"
+  functions = "netlify/functions"
+
+[build.environment]
+  NODE_VERSION = "22"
+  # Netlify corta las funciones a los 10 s en cuentas antiguas: nos quedamos
+  # con margen tanto en las peticiones salientes como en el total.
+  ADDON_HTTP_TIMEOUT_MS = "8000"
+  NETLIFY_ADDON_DEADLINE_MS = "9000"
+  # 1 h de caché de CDN para catalogs/streams (más fresco que las 6 h locales).
+  ADDON_CACHE_MAX_AGE = "3600"
+
+[functions]
+  node_bundler = "esbuild"
+
+# Las rutas propias de Netlify Functions no deben pasar por el catch-all.
+[[redirects]]
+  from = "/.netlify/functions/*"
+  to = "/.netlify/functions/:splat"
+  status = 200
+
+# Todo el tráfico va a la función (rewrite 200: la URL del navegador no cambia).
+[[redirects]]
+  from = "/*"
+  to = "/.netlify/functions/addon/:splat"
+  status = 200
+  force = true
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    # CORS lo pone el SDK en cada respuesta; duplicarlo aquí rompería el header.
+    X-Content-Type-Options = "nosniff"

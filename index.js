@@ -16,6 +16,7 @@ const HT = require('./lib/hacktorrent');
 const Knaben = require('./lib/knaben');
 const BlackHoleBay = require('./lib/theblackholebay');
 const { normalizarConfig, aplicarConfig, fuentesActivas } = require('./lib/config');
+const { timeout } = require('./lib/timeouts');
 const {
   pickBestMatch,
   rankCandidates,
@@ -274,7 +275,7 @@ async function resolverInfo(type, req) {
     if (cached) return cached;
     try {
       const res = await axios.get(`https://kitsu.io/api/edge/anime/${encodeURIComponent(req.kitsuId)}`, {
-        timeout: 10000,
+        timeout: timeout(10000),
         headers: { Accept: 'application/vnd.api+json' }
       });
       const a = res.data?.data?.attributes || {};
