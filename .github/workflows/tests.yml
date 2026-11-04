@@ -3,7 +3,8 @@ on:
   pull_request:
   push:
     branches:
-      - arena/09872de1-mi-stremio-addon
+      - main
+      - 'arena/**'
 permissions:
   contents: read
 jobs:

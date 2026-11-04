@@ -14,7 +14,14 @@ Abre el puerto 3000. Para pruebas: `python -m unittest discover -s tests -v`.
 
 - Subida y arrastre de un APK (máximo 80 MB).
 - URLs HTTP/HTTPS/WebSocket y archivos de origen, dominios, permisos Android y posibles secretos redactados.
-- Lectura del string pool del manifiesto XML binario de Android.
+- **Manifiesto estructurado** (XML binario): paquete, versión, `minSdk/targetSdk`, permisos declarados, componentes con `exported`/permiso, intent-filters y **deep links**.
+- **DEX estructurado** (multidex): cadenas limpias vía `string_ids`, nº de clases y versión.
+- **Firma**: esquemas v1/v2/v3, certificados (subject/issuer, validez, huella SHA-256) y detección de certificado de depuración. La firma se identifica, no se verifica.
+- **SDKs conocidos** por dominio (Firebase, analíticas, publicidad, push, CDN…), heurística offline sin consultas de red.
+- **Enfoque en vídeo/streaming:** las APIs candidatas se etiquetan por tipo (`Vídeo/Streaming`, `Catálogo/Datos`, `Autenticación`, `API`) y se reconocen rutas y extensiones de streaming (HLS `.m3u8`, DASH `.mpd`, `/live`, `/vod`, `/player_api.php` tipo Xtream, etc.).
+- **Verificación de APIs opt-in:** botón web "⚡ Verificar APIs" o `cli.py --verify` sondan la disponibilidad de las candidatas (sin credenciales, con protección SSRF y clasificación del contenido: JSON, HLS, DASH, vídeo). Nunca es automática.
+- **`network_security_config.xml`** parseado (dominios con HTTP permitido, pinning) y hallazgos de **exportación implícita** (Android < 12).
+- Secretos ampliados: claves Google/AWS, tokens GitHub/Slack/Stripe/SendGrid/Mailgun, JWT y claves privadas, siempre redactados.
 - Filtro y exportación JSON, con hash SHA-256 del archivo.
 - Sin ejecutar ni extraer archivos del APK. Procesamiento en memoria; no se guarda el APK en disco.
 - Límites de archivos, tamaño expandido y hallazgos; un análisis simultáneo.
@@ -99,6 +106,70 @@ python cli.py --code 5842501
 
 La cadena código → MediaFire → APK está cubierta con respuestas simuladas. No se ha confirmado la descarga real del código `5842501`: el entorno de desarrollo no tiene acceso a ese proveedor. La compatibilidad depende del formato de respuesta actual de AFTVnews.
 
+## Análisis estructurado (versión 3)
+
+Además de buscar cadenas, ahora se parsean las estructuras binarias de Android
+(sin dependencias externas y con *fallback* al escaneo crudo si fallan):
+
+- **`axml.py`**: manifiesto XML binario → paquete, `versionName/versionCode`,
+  `minSdk/targetSdk`, permisos declarados y definidos, flags de `application`
+  (`debuggable`, `allowBackup`, `usesCleartextTraffic`, `networkSecurityConfig`…),
+  componentes (`activity/service/receiver/provider`) con `exported`, permiso e
+  intent-filters, y **deep links BROWSABLE**. También lee el string pool global de
+  `resources.arsc`.
+- **`dex.py`**: `classes*.dex` (multidex) → cadenas limpias (`string_ids` +
+  ULEB128/MUTF-8), nº de clases y versión DEX.
+- **`certs.py`**: certificados X.509 de `META-INF/*.RSA|DSA|EC` (PKCS#7) →
+  subject/issuer, validez, serial, huella SHA-256, autofirmado y certificado de
+  depuración; detección del bloque de firma v2/v3. **No verifica** la firma ni la
+  cadena de confianza.
+- **`known_domains.py`**: clasificación heurística offline de SDKs/servicios por
+  sufijo de dominio.
+
+El JSON pasa a **esquema 3.0** con secciones `manifest`, `dex`, `signature` y
+`sdks`; el HTML añade las secciones Manifiesto, Componentes/deep links, Firma y
+SDKs; la web suma pestañas equivalentes. Los hallazgos incluyen ahora
+`debuggable`, `allowBackup`, `usesCleartextTraffic`, componentes exportados sin
+permiso y certificado de depuración. Todo sigue redactado y escapado.
+
+Validado con APKs reales de Androguard (TV Leanback, Jamendo, TestActivity) y con
+`certificate.der` contrastado contra OpenSSL. 86 pruebas automatizadas.
+
+## Verificación de APIs (opt-in)
+
+Por defecto APK Lens **no contacta ningún endpoint**: el análisis es offline. La
+verificación es un paso **opcional y explícito** que solo corre si la pides:
+
+- Web: botón **⚡ Verificar APIs** (envía las candidatas a `POST /api/verify`).
+- CLI: `python cli.py --apk app.apk --verify`.
+
+Qué hace y qué no:
+
+- Sondea la **disponibilidad** (código HTTP, tipo de contenido) de hasta 40
+  candidatas, con timeout por petición y presupuesto total. Clasifica la respuesta
+  como JSON (solo claves, nunca valores), playlist HLS, manifiesto DASH, vídeo,
+  XML/EPG o HTML.
+- **Nunca** envía credenciales, tokens, cookies ni cabeceras del APK. No reutiliza
+  secretos hallados.
+- **Protección SSRF:** bloquea destinos con IP privada/reservada y URLs con
+  usuario/contraseña. Las rutas redactadas (`[oculto]`) se marcan "No verificable".
+- Devuelve un resumen redactado; no guarda el cuerpo de las respuestas.
+
+**Importante:** que una API responda 200 **no concede permiso de uso**. Confirma
+siempre la autorización con el propietario antes de integrar nada. La validación
+DNS es una defensa básica, no aislamiento frente a DNS rebinding: en despliegues
+expuestos añade control de salida de red. En este entorno de desarrollo la red
+está restringida, así que la verificación real de proveedores externos debe
+ejecutarse en tu propia máquina/servidor.
+
 ## Investigación y validación
 
-Consulta [docs/INVESTIGACION.md](docs/INVESTIGACION.md) para las fuentes revisadas, hallazgos, prueba con un APK real y límites pendientes. MediaFire admite además `data-scrambled-url` Base64 y redirecciones literales restringidas a sus hosts de descarga, sin ejecutar JavaScript. Se descargan bloques de hasta 64 KiB con un presupuesto temporal y errores de proveedor redactados. Namespaces XML conocidos se separan de las conexiones de red para no alertar por tráfico inexistente.
+Consulta [docs/INVESTIGACION.md](docs/INVESTIGACION.md) (ronda 1) y
+[docs/INVESTIGACION2.md](docs/INVESTIGACION2.md) (ronda 2: brechas frente a
+Androguard, MobSF y APKLeaks, implementación y validación real).
+MediaFire admite además `data-scrambled-url` Base64 y redirecciones literales restringidas a sus hosts de descarga, sin ejecutar JavaScript. Se descargan bloques de hasta 64 KiB con un presupuesto temporal y errores de proveedor redactados. Namespaces XML conocidos se separan de las conexiones de red para no alertar por tráfico inexistente.
+
+**Identidad del proyecto:** este repositorio es **APK Lens**, un analizador
+estático de APK. El nombre del repo (`Mi-stremio-Addon`) es histórico y no
+describe el contenido: no es un addon de Stremio ni pretende serlo. No hay código
+de Stremio ni de addons; todo el proyecto es el analizador.
