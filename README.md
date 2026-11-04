@@ -14,7 +14,11 @@ Abre el puerto 3000. Para pruebas: `python -m unittest discover -s tests -v`.
 
 - Subida y arrastre de un APK (máximo 80 MB).
 - URLs HTTP/HTTPS/WebSocket y archivos de origen, dominios, permisos Android y posibles secretos redactados.
-- Lectura del string pool del manifiesto XML binario de Android.
+- **Manifiesto estructurado** (XML binario): paquete, versión, `minSdk/targetSdk`, permisos declarados, componentes con `exported`/permiso, intent-filters y **deep links**.
+- **DEX estructurado** (multidex): cadenas limpias vía `string_ids`, nº de clases y versión.
+- **Firma**: esquemas v1/v2/v3, certificados (subject/issuer, validez, huella SHA-256) y detección de certificado de depuración. La firma se identifica, no se verifica.
+- **SDKs conocidos** por dominio (Firebase, analíticas, publicidad, push, CDN…), heurística offline sin consultas de red.
+- Secretos ampliados: claves Google/AWS, tokens GitHub/Slack/Stripe/SendGrid/Mailgun, JWT y claves privadas, siempre redactados.
 - Filtro y exportación JSON, con hash SHA-256 del archivo.
 - Sin ejecutar ni extraer archivos del APK. Procesamiento en memoria; no se guarda el APK en disco.
 - Límites de archivos, tamaño expandido y hallazgos; un análisis simultáneo.
@@ -99,6 +103,44 @@ python cli.py --code 5842501
 
 La cadena código → MediaFire → APK está cubierta con respuestas simuladas. No se ha confirmado la descarga real del código `5842501`: el entorno de desarrollo no tiene acceso a ese proveedor. La compatibilidad depende del formato de respuesta actual de AFTVnews.
 
+## Análisis estructurado (versión 3)
+
+Además de buscar cadenas, ahora se parsean las estructuras binarias de Android
+(sin dependencias externas y con *fallback* al escaneo crudo si fallan):
+
+- **`axml.py`**: manifiesto XML binario → paquete, `versionName/versionCode`,
+  `minSdk/targetSdk`, permisos declarados y definidos, flags de `application`
+  (`debuggable`, `allowBackup`, `usesCleartextTraffic`, `networkSecurityConfig`…),
+  componentes (`activity/service/receiver/provider`) con `exported`, permiso e
+  intent-filters, y **deep links BROWSABLE**. También lee el string pool global de
+  `resources.arsc`.
+- **`dex.py`**: `classes*.dex` (multidex) → cadenas limpias (`string_ids` +
+  ULEB128/MUTF-8), nº de clases y versión DEX.
+- **`certs.py`**: certificados X.509 de `META-INF/*.RSA|DSA|EC` (PKCS#7) →
+  subject/issuer, validez, serial, huella SHA-256, autofirmado y certificado de
+  depuración; detección del bloque de firma v2/v3. **No verifica** la firma ni la
+  cadena de confianza.
+- **`known_domains.py`**: clasificación heurística offline de SDKs/servicios por
+  sufijo de dominio.
+
+El JSON pasa a **esquema 3.0** con secciones `manifest`, `dex`, `signature` y
+`sdks`; el HTML añade las secciones Manifiesto, Componentes/deep links, Firma y
+SDKs; la web suma pestañas equivalentes. Los hallazgos incluyen ahora
+`debuggable`, `allowBackup`, `usesCleartextTraffic`, componentes exportados sin
+permiso y certificado de depuración. Todo sigue redactado y escapado.
+
+Validado con APKs reales de Androguard (TV Leanback, Jamendo, TestActivity) y con
+`certificate.der` contrastado contra OpenSSL. 67 pruebas automatizadas.
+
 ## Investigación y validación
 
-Consulta [docs/INVESTIGACION.md](docs/INVESTIGACION.md) para las fuentes revisadas, hallazgos, prueba con un APK real y límites pendientes. MediaFire admite además `data-scrambled-url` Base64 y redirecciones literales restringidas a sus hosts de descarga, sin ejecutar JavaScript. Se descargan bloques de hasta 64 KiB con un presupuesto temporal y errores de proveedor redactados. Namespaces XML conocidos se separan de las conexiones de red para no alertar por tráfico inexistente.
+Consulta [docs/INVESTIGACION.md](docs/INVESTIGACION.md) (ronda 1) y
+[docs/INVESTIGACION2.md](docs/INVESTIGACION2.md) (ronda 2: brechas frente a
+Androguard, MobSF, APKLeaks y Stremio SDK, implementación y validación real).
+MediaFire admite además `data-scrambled-url` Base64 y redirecciones literales restringidas a sus hosts de descarga, sin ejecutar JavaScript. Se descargan bloques de hasta 64 KiB con un presupuesto temporal y errores de proveedor redactados. Namespaces XML conocidos se separan de las conexiones de red para no alertar por tráfico inexistente.
+
+**Nota de producto:** el repositorio se llama `Mi-stremio-Addon` pero hoy solo
+contiene el analizador APK Lens. El addon Stremio en sí (servicio HTTP con
+`manifest.json` y handlers `catalog/meta/stream`) sigue pendiente; depende de
+confirmar una API objetivo autorizada. Ver la brecha de producto en
+[docs/INVESTIGACION2.md](docs/INVESTIGACION2.md).

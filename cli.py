@@ -29,14 +29,26 @@ def main():
         out.mkdir(parents=True, exist_ok=True)
         (out / 'report.json').write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding='utf-8')
         write_reports(result, out)
+        manifest = result.get('manifest') or {}
+        sig = result.get('signature', {})
+        schemes = ', '.join(n for n, on in (('v1', sig.get('v1')), ('v2', sig.get('v2')), ('v3', sig.get('v3'))) if on) or 'ninguna'
+        identity = []
+        if manifest:
+            identity += [
+                f"- Paquete: `{manifest.get('package', '?')}` · versión {manifest.get('version_name', '?')} ({manifest.get('version_code', '?')})",
+                f"- SDK: min {manifest.get('min_sdk', '?')} / target {manifest.get('target_sdk', '?')}",
+                f"- Permisos declarados: {result['summary']['declared_permissions']} · Componentes: {result['summary']['components']} · Deep links: {result['summary']['deep_links']}",
+            ]
+        identity += [f"- Firma: {schemes} · Certificados: {len(sig.get('certificates', []))} · SDKs conocidos: {result['summary']['known_sdks']}"]
         summary = '\n'.join([
             '# APK Lens · Resultado', '',
             f"- URLs: {len(result['urls'])}",
             f"- Dominios: {len(set(u['host'] for u in result['urls']))}",
             f"- APIs candidatas ordenadas (heurística): {result['summary']['possible_apis']}",
             f"- Referencias sin TLS: {result['summary']['without_tls']}",
-            f"- Permisos: {len(result['permissions'])}",
+            f"- Permisos encontrados: {len(result['permissions'])}",
             f"- Posibles secretos: {len(result['secrets'])}",
+            *identity,
             f"- Archivos analizados: {result['files_scanned']} / {result['files_total']}",
             f"- SHA-256: `{result['sha256']}`", '',
             'Descarga el artefacto **apk-lens-report** y abre report.html para ver el reporte organizado. También incluye JSON y CSV.', '',
