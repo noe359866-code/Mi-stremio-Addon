@@ -18,6 +18,9 @@ Abre el puerto 3000. Para pruebas: `python -m unittest discover -s tests -v`.
 - **DEX estructurado** (multidex): cadenas limpias vía `string_ids`, nº de clases y versión.
 - **Firma**: esquemas v1/v2/v3, certificados (subject/issuer, validez, huella SHA-256) y detección de certificado de depuración. La firma se identifica, no se verifica.
 - **SDKs conocidos** por dominio (Firebase, analíticas, publicidad, push, CDN…), heurística offline sin consultas de red.
+- **Enfoque en vídeo/streaming:** las APIs candidatas se etiquetan por tipo (`Vídeo/Streaming`, `Catálogo/Datos`, `Autenticación`, `API`) y se reconocen rutas y extensiones de streaming (HLS `.m3u8`, DASH `.mpd`, `/live`, `/vod`, `/player_api.php` tipo Xtream, etc.).
+- **Verificación de APIs opt-in:** botón web "⚡ Verificar APIs" o `cli.py --verify` sondan la disponibilidad de las candidatas (sin credenciales, con protección SSRF y clasificación del contenido: JSON, HLS, DASH, vídeo). Nunca es automática.
+- **`network_security_config.xml`** parseado (dominios con HTTP permitido, pinning) y hallazgos de **exportación implícita** (Android < 12).
 - Secretos ampliados: claves Google/AWS, tokens GitHub/Slack/Stripe/SendGrid/Mailgun, JWT y claves privadas, siempre redactados.
 - Filtro y exportación JSON, con hash SHA-256 del archivo.
 - Sin ejecutar ni extraer archivos del APK. Procesamiento en memoria; no se guarda el APK en disco.
@@ -130,7 +133,34 @@ SDKs; la web suma pestañas equivalentes. Los hallazgos incluyen ahora
 permiso y certificado de depuración. Todo sigue redactado y escapado.
 
 Validado con APKs reales de Androguard (TV Leanback, Jamendo, TestActivity) y con
-`certificate.der` contrastado contra OpenSSL. 67 pruebas automatizadas.
+`certificate.der` contrastado contra OpenSSL. 86 pruebas automatizadas.
+
+## Verificación de APIs (opt-in)
+
+Por defecto APK Lens **no contacta ningún endpoint**: el análisis es offline. La
+verificación es un paso **opcional y explícito** que solo corre si la pides:
+
+- Web: botón **⚡ Verificar APIs** (envía las candidatas a `POST /api/verify`).
+- CLI: `python cli.py --apk app.apk --verify`.
+
+Qué hace y qué no:
+
+- Sondea la **disponibilidad** (código HTTP, tipo de contenido) de hasta 40
+  candidatas, con timeout por petición y presupuesto total. Clasifica la respuesta
+  como JSON (solo claves, nunca valores), playlist HLS, manifiesto DASH, vídeo,
+  XML/EPG o HTML.
+- **Nunca** envía credenciales, tokens, cookies ni cabeceras del APK. No reutiliza
+  secretos hallados.
+- **Protección SSRF:** bloquea destinos con IP privada/reservada y URLs con
+  usuario/contraseña. Las rutas redactadas (`[oculto]`) se marcan "No verificable".
+- Devuelve un resumen redactado; no guarda el cuerpo de las respuestas.
+
+**Importante:** que una API responda 200 **no concede permiso de uso**. Confirma
+siempre la autorización con el propietario antes de integrar nada. La validación
+DNS es una defensa básica, no aislamiento frente a DNS rebinding: en despliegues
+expuestos añade control de salida de red. En este entorno de desarrollo la red
+está restringida, así que la verificación real de proveedores externos debe
+ejecutarse en tu propia máquina/servidor.
 
 ## Investigación y validación
 

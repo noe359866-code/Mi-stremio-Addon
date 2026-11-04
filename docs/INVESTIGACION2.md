@@ -135,24 +135,47 @@ como "catalog" o "stream" en el código son la heurística de rutas de
 `api_candidates.py` y los *streams* de archivos de Python. No es un addon ni
 pretende serlo; cualquier hoja de ruta debe centrarse en el analizador.
 
+## Ronda 3 · Verificación de APIs y enfoque en vídeo
+
+Petición: que el analizador **verifique las APIs candidatas** (los APKs objetivo
+son de vídeo) y cerrar lo pendiente. Implementado:
+
+- **`api_probe.py` (verificación opt-in).** Único punto que toca la red más allá
+  de descargar el APK, y solo bajo petición explícita (botón web "⚡ Verificar
+  APIs" → `POST /api/verify`, o `cli.py --verify`). Reglas: nunca envía
+  credenciales/tokens/cookies del APK; bloquea IPs privadas/reservadas y userinfo
+  (SSRF); máx. 40 candidatas, timeout por petición y presupuesto total; clasifica
+  la respuesta (JSON solo con claves, HLS, DASH, vídeo, XML/EPG, HTML) sin guardar
+  el cuerpo. Un 200 **no** concede permiso de uso. Probado con respuestas
+  simuladas; la red de este entorno está restringida, así que el sondeo real de
+  proveedores externos debe correr en la máquina del usuario.
+- **Detección afinada a vídeo** (`api_candidates.py`): campo `kind`
+  (`Vídeo/Streaming`, `Catálogo/Datos`, `Autenticación`, `API`), rutas
+  (`/live`, `/vod`, `/stream`, `/movies`, `/series`, `/channel`, `/hls`, `/dash`,
+  `/epg`, `player_api.php`/`get.php` tipo Xtream) y extensiones (`.m3u8`, `.mpd`,
+  `.mp4`, `.ts`…). Los manifiestos HLS/DASH dejan de tratarse como recurso estático.
+  `reporting.py` añade la categoría `Vídeo/Streaming`.
+- **Cerrados los pendientes 1–3 de la lista anterior:**
+  1. Pestaña web **Revisión** que muestra los `findings`.
+  2. **`network_security_config.xml`** parseado (`axml.parse_network_security`,
+     con captura de texto CDATA para los `<domain>`): dominios con cleartext y
+     pinning, integrado en el análisis y en los hallazgos.
+  3. **Exportación implícita** (intent-filter sin `exported` y targetSdk < 31)
+     como hallazgo informativo.
+- El reporte HTML y la CLI incluyen la tabla de verificación cuando se usa.
+- **86 tests** (67 previos + 19 nuevos: probe, candidatos de vídeo, NSC,
+  exportación implícita).
+
 ## Qué queda por hacer en el analizador
 
-Ordenado por valor/esfuerzo, todo dentro del alcance de APK Lens:
-
-1. **Mostrar los hallazgos en la web.** La v3 calcula `findings` (debuggable,
-   exportados, certificado de depuración, sin TLS, secretos) y los vuelca en JSON
-   y HTML, pero la interfaz web no tiene pestaña de "Revisión". Cabo suelto rápido.
-2. **`network_security_config.xml`.** Se detecta el atributo del manifiesto pero
-   no se parsea el XML referenciado (dominios con cleartext permitido, pinning).
-3. **Exportación implícita.** Componentes con intent-filter sin `android:exported`
-   explícito son exportados por defecto en Android < 12; conviene señalarlo.
-4. **`resources.arsc` completo.** Hoy solo el pool de cadenas global; faltan
+1. **`resources.arsc` completo.** Hoy solo el pool de cadenas global; faltan
    nombres de recurso y valores por configuración para saber de qué recurso salió
    una URL.
-5. **Endurecer el servidor** para uso no local: autenticación, TLS, límites en un
+2. **Endurecer el servidor** para uso no local: autenticación, TLS, límites en un
    proxy y aislamiento de salida (DNS rebinding). Hoy es solo desarrollo.
-6. **Verificación real de descargas.** Captura del flujo AFTVnews `5842501` y
-   resolvedor de 1fichier cuando haya acceso a esos proveedores.
-7. **Mayor profundidad (opcional, rompe el diseño ligero):** descompilación DEX,
+3. **Verificación real de descargas y de APIs.** Captura del flujo AFTVnews
+   `5842501`, resolvedor de 1fichier, y sondeo real de APIs de vídeo en una red
+   sin restricciones (aquí no es posible).
+4. **Mayor profundidad (opcional, rompe el diseño ligero):** descompilación DEX,
    símbolos de `.so`, soporte AAB/split APKs, verificación criptográfica de firma.
    Se descartan por ahora para mantener cero dependencias y análisis acotado.

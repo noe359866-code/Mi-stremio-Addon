@@ -6,7 +6,7 @@ import struct
 import zipfile
 from urllib.parse import urlsplit
 from reporting import enrich
-from axml import parse_manifest, arsc_strings
+from axml import parse_manifest, arsc_strings, parse_network_security
 from dex import dex_info, DEX_NAME
 from certs import cert_info, signing_schemes, JAR_CERT, JAR_SF, MAX_CERT_BYTES
 
@@ -106,6 +106,7 @@ def analyze(blob, filename):
             raise ValueError('No se encontró AndroidManifest.xml. Selecciona un APK.')
         urls, permissions, secrets, warnings = {}, set(), [], []
         manifest, dex_files, certificates = None, [], []
+        network_security = None
         has_sf, has_jar_cert = False, False
         scanned = 0
         for entry in entries:
@@ -139,6 +140,12 @@ def analyze(blob, filename):
                     text = _raw_text(data) + '\n' + '\n'.join(arsc_strings(data))
                 except ValueError:
                     text = _raw_text(data)
+            elif name.startswith('res/xml/') and name.endswith('.xml') and network_security is None:
+                try:
+                    network_security = dict(parse_network_security(data), files=[name])
+                except ValueError:
+                    pass
+                text = _raw_text(data)
             else:
                 text = _raw_text(data)
                 if JAR_SF.match(name):
@@ -179,4 +186,5 @@ def analyze(blob, filename):
                 'urls': sorted(urls.values(), key=lambda x: x['url']), 'permissions': sorted(permissions),
                 'secrets': secrets, 'warnings': warnings,
                 'manifest': manifest, 'dex': dex_files, 'signature': signature,
+                'network_security': network_security,
                 'limitations': 'Análisis estático orientativo. No confirma que las URLs sean APIs activas ni detecta todo el contenido cifrado, ofuscado o generado en ejecución. Las coincidencias de secretos pueden ser falsos positivos. Se omiten valores de consultas, fragmentos y posibles tokens largos en rutas. La firma se identifica, no se verifica criptográficamente.'})

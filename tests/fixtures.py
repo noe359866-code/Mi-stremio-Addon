@@ -51,6 +51,8 @@ def axml_bytes(tree, utf8=True):
             sid(name)
             if isinstance(value, str):
                 sid(value)
+        if node.get('text'):
+            sid(node['text'])
         for child in node.get('children', []):
             collect(child)
 
@@ -79,6 +81,10 @@ def axml_bytes(tree, utf8=True):
                 raw, dtype, data = sid(value), 0x03, sid(value)
             body += struct.pack('<IIIHBBI', ans, aname, raw, 8, 0, dtype, data)
         out.append(tag_chunk(0x0102, head + body))
+        if node.get('text'):
+            tidx = sid(node['text'])
+            out.append(struct.pack('<HHIII', 0x0104, 16, 28, 0, 0xFFFFFFFF) +
+                       struct.pack('<I', tidx) + struct.pack('<HBBI', 8, 0, 0x03, tidx))
         for child in node.get('children', []):
             emit(child)
         out.append(tag_chunk(0x0103, struct.pack('<II', 0xFFFFFFFF, sid(node['tag']))))

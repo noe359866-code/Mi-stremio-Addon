@@ -35,12 +35,32 @@ def _manifest_findings(result):
             if app.get(key) == 'true':
                 findings.append({'priority': 'Revisar', 'type': title, 'evidence': 'android:' + key + '=true',
                                  'files': ['AndroidManifest.xml'], 'recommendation': advice})
+        try:
+            target = int(manifest.get('target_sdk'))
+        except (TypeError, ValueError):
+            target = None
         for comp in manifest.get('components', [])[:200]:
+            label = comp.get('type', '') + ' ' + comp.get('name', '')
             if comp.get('exported') == 'true' and not comp.get('permission'):
                 findings.append({'priority': 'Revisar', 'type': 'Componente exportado sin permiso',
-                                 'evidence': comp.get('type', '') + ' ' + comp.get('name', ''),
-                                 'files': ['AndroidManifest.xml'],
+                                 'evidence': label, 'files': ['AndroidManifest.xml'],
                                  'recommendation': 'Un componente exportado sin permiso es accesible por otras apps. Confirma que es intencional o protégelo con un permiso.'})
+            elif comp.get('exported') is None and comp.get('intent_filters') and (target is None or target < 31):
+                findings.append({'priority': 'Info', 'type': 'Exportación implícita (Android < 12)',
+                                 'evidence': label, 'files': ['AndroidManifest.xml'],
+                                 'recommendation': 'Con intent-filter y sin android:exported explícito, el componente es exportado por defecto si targetSdk < 31. Declara exported explícitamente.'})
+    nsc = result.get('network_security')
+    if nsc:
+        cleartext = nsc.get('cleartext_domains', [])
+        if nsc.get('base_cleartext') or cleartext:
+            evidence = 'base-config cleartext' if nsc.get('base_cleartext') else ', '.join(cleartext[:10])
+            findings.append({'priority': 'Revisar', 'type': 'network_security_config permite HTTP',
+                             'evidence': evidence, 'files': nsc.get('files', ['res/xml/']),
+                             'recommendation': 'La configuración de seguridad de red permite tráfico sin TLS para estos dominios. Prefiere HTTPS y revisa el pinning.'})
+        if nsc.get('pins'):
+            findings.append({'priority': 'Info', 'type': 'Certificate pinning declarado',
+                             'evidence': '%d pin(s)' % nsc['pins'], 'files': nsc.get('files', ['res/xml/']),
+                             'recommendation': 'La app declara pinning de certificados; indica qué endpoints protege. No se verifica el pin.'})
     for cert in result.get('signature', {}).get('certificates', []):
         if cert.get('debug_certificate'):
             findings.append({'priority': 'Revisar', 'type': 'Firmado con certificado de depuración',
@@ -61,7 +81,9 @@ def enrich(result):
             category = 'WebSocket'
         elif any(x in path for x in ('/api', '/graphql', '/rest/', '/oauth', '/v1/', '/v2/', '/v3/')):
             category = 'Posible API'
-        elif path.endswith(('.png', '.jpg', '.svg', '.css', '.js', '.woff', '.mp4', '.m3u8')):
+        elif path.endswith(('.m3u8', '.mpd', '.mp4', '.ts', '.m4s', '.webm', '.mkv', '.flv', '.mp3', '.aac')):
+            category = 'Vídeo/Streaming'
+        elif path.endswith(('.png', '.jpg', '.svg', '.css', '.js', '.woff', '.ico', '.ttf', '.otf')):
             category = 'Recurso'
         else:
             category = 'Otra URL'
@@ -135,7 +157,13 @@ def write_reports(result, directory):
     schemes = ', '.join(name for name, on in (('v1 (JAR)', sig.get('v1')), ('v2', sig.get('v2')), ('v3', sig.get('v3'))) if on) or 'ninguna detectada'
     cert_rows = [(c.get('subject', ''), c.get('issuer', ''), c.get('valid_from', ''), c.get('valid_until', ''), c.get('sha256', ''), 'Sí' if c.get('debug_certificate') else 'No', 'Sí' if c.get('self_signed') else 'No') for c in sig.get('certificates', [])]
     sections.append('<h2 id="signature">4. Firma</h2><p>Esquemas detectados: ' + esc(schemes) + '. La huella identifica el certificado; no se verifica la firma ni la cadena de confianza.</p>' + (table(['Subject', 'Issuer', 'Desde', 'Hasta', 'SHA-256', 'Depuración', 'Autofirmado'], cert_rows) if cert_rows else '<p>No se extrajeron certificados (APK sin firma JAR legible o solo v2/v3).</p>'))
-    sections.append('<h2 id="apis">5. APIs candidatas · Recomendaciones</h2><p>Ordenadas por indicios de ruta y dominio, no por calidad o seguridad. La confianza es heurística, no una probabilidad. Solo se muestran URLs observadas en el APK. Ninguna se ha contactado ni verificado.</p>' + (table(['Confianza / puntos', 'URL observada (redactada)', 'Por qué parece una API', 'Origen', 'Qué revisar'], [(a['confidence'] + ' / ' + str(a['score']), a['url'], '\n'.join(a['reasons']), '\n'.join(a['files']), '\n'.join(a['recommendations'])) for a in result['api_candidates']]) if result['api_candidates'] else '<p>No se encontraron candidatos con estas reglas. Esto no significa que el APK no use APIs.</p>'))
+    apis_html = '<h2 id="apis">5. APIs candidatas · Recomendaciones</h2><p>Ordenadas por indicios de ruta y dominio, no por calidad o seguridad. La confianza es heurística, no una probabilidad. Solo se muestran URLs observadas en el APK. La verificación de disponibilidad es un paso opt-in separado; por defecto no se contacta ningún endpoint.</p>' + (table(['Tipo', 'Confianza / puntos', 'URL observada (redactada)', 'Por qué parece una API', 'Origen', 'Qué revisar'], [(a.get('kind', 'API'), a['confidence'] + ' / ' + str(a['score']), a['url'], '\n'.join(a['reasons']), '\n'.join(a['files']), '\n'.join(a['recommendations'])) for a in result['api_candidates']]) if result['api_candidates'] else '<p>No se encontraron candidatos con estas reglas. Esto no significa que el APK no use APIs.</p>')
+    verification = result.get('verification')
+    if verification:
+        vrows = [(v['url'], v['status'], v.get('http_status') or '—', v.get('kind') or '—', v.get('detail') or '') for v in verification['results']]
+        vs = verification['summary']
+        apis_html += '<h3>Verificación de disponibilidad (opt-in)</h3><p>' + esc(vs['note']) + '</p><p>Sondadas: ' + esc(vs['probed']) + ' · Accesibles: ' + esc(vs['accessible']) + ' · Vídeo: ' + esc(vs['video']) + ' · JSON: ' + esc(vs['json']) + ' · Con error: ' + esc(vs['errors']) + '</p>' + table(['URL', 'Estado', 'HTTP', 'Tipo de contenido', 'Detalle'], vrows)
+    sections.append(apis_html)
     sdk_rows = [(s['host'], s['sdk'], s['category'], s['url_count']) for s in result.get('sdks', [])]
     sections.append('<h2 id="sdks">6. SDKs y servicios conocidos</h2><p>Clasificación heurística por sufijo de dominio, sin consultas de red. Sugiere que un SDK está referenciado, no que esté activo.</p>' + (table(['Dominio', 'SDK / servicio', 'Categoría', 'URLs'], sdk_rows) if sdk_rows else '<p>Ningún dominio coincide con la lista curada.</p>'))
     sections.append('<h2 id="review">7. Elementos a revisar (no vulnerabilidades confirmadas)</h2>' + table(['Tipo', 'Evidencia redactada', 'Origen', 'Recomendación'], [(f['type'], f['evidence'], '\n'.join(f['files']), f['recommendation']) for f in result['findings']]))

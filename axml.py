@@ -140,7 +140,7 @@ def parse_axml(data):
                 name = pool[aname] if aname < len(pool) else ''
                 if name:
                     attrs[(uri, name)] = _attr_value(pool, araw, vtype, vdata)
-            node = {'tag': pool[name_idx] if name_idx < len(pool) else '', 'attrs': attrs, 'children': []}
+            node = {'tag': pool[name_idx] if name_idx < len(pool) else '', 'attrs': attrs, 'children': [], 'text': ''}
             if stack:
                 stack[-1]['children'].append(node)
             elif root is None:
@@ -149,7 +149,12 @@ def parse_axml(data):
         elif kind == CHUNK_XML_END_TAG:
             if stack:
                 stack.pop()
-        # Namespace, CDATA and resource-map chunks carry no manifest semantics.
+        elif kind == 0x0104 and stack:                   # CDATA: text content of the current tag
+            if pos + 20 <= len(data):
+                text_idx = struct.unpack_from('<I', data, pos + 16)[0]
+                if text_idx != NONE32 and text_idx < len(pool):
+                    stack[-1]['text'] += pool[text_idx]
+        # Namespace and resource-map chunks carry no manifest semantics.
         pos += size
     if root is None:
         raise ValueError('No se encontró la etiqueta raíz del XML binario.')
@@ -254,3 +259,31 @@ def arsc_strings(data):
     if kind != 0x0002:                                 # RES_TABLE_TYPE
         raise ValueError('El archivo no es una tabla de recursos.')
     return read_string_pool(data, header_size)
+
+
+def parse_network_security(data):
+    """Parse a network_security_config XML: cleartext domains and pinning."""
+    root = parse_axml(data)
+    if root['tag'] != 'network-security-config':
+        raise ValueError('El XML no es <network-security-config>.')
+
+    def attr(node, name):
+        return node['attrs'].get(('', name)) or node['attrs'].get((ANDROID_NS, name))
+
+    info = {'base_cleartext': False, 'cleartext_domains': [], 'domains': [], 'pins': 0}
+    for child in root['children']:
+        if child['tag'] == 'base-config':
+            if attr(child, 'cleartextTrafficPermitted') == 'true':
+                info['base_cleartext'] = True
+        elif child['tag'] == 'domain-config':
+            cleartext = attr(child, 'cleartextTrafficPermitted') == 'true'
+            for d in child['children']:
+                if d['tag'] == 'domain':
+                    name = d.get('text', '').strip()
+                    if name:
+                        info['domains'].append(name)
+                        if cleartext and name not in info['cleartext_domains']:
+                            info['cleartext_domains'].append(name)
+                elif d['tag'] == 'pin-set':
+                    info['pins'] += sum(1 for p in d['children'] if p['tag'] == 'pin')
+    return info

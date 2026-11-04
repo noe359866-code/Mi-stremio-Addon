@@ -15,6 +15,8 @@ def main():
     source.add_argument('--url', help='URL HTTPS directa o enlace público compatible (MediaFire/Dropbox)')
     source.add_argument('--code', help='Código numérico Downloader de go.aftvnews.com')
     parser.add_argument('--output', default='reports')
+    parser.add_argument('--verify', action='store_true',
+                        help='Sondeo opt-in de disponibilidad de las APIs candidatas (sin credenciales; requiere red)')
     args = parser.parse_args()
     try:
         if args.code:
@@ -25,6 +27,9 @@ def main():
             with Path(args.apk).open('rb') as stream:
                 blob = stream.read(MAX_UPLOAD + 1)
         result = analyze(blob, 'archivo.apk')
+        if args.verify:
+            from api_probe import verify_candidates
+            result['verification'] = verify_candidates([a['url'] for a in result['api_candidates']])
         out = Path(args.output)
         out.mkdir(parents=True, exist_ok=True)
         (out / 'report.json').write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding='utf-8')
@@ -40,6 +45,11 @@ def main():
                 f"- Permisos declarados: {result['summary']['declared_permissions']} · Componentes: {result['summary']['components']} · Deep links: {result['summary']['deep_links']}",
             ]
         identity += [f"- Firma: {schemes} · Certificados: {len(sig.get('certificates', []))} · SDKs conocidos: {result['summary']['known_sdks']}"]
+        verification = result.get('verification')
+        if verification:
+            vs = verification['summary']
+            identity += [f"- Verificación (opt-in): {vs['probed']} sondadas · {vs['accessible']} accesibles · {vs['video']} de vídeo · {vs['json']} JSON · {vs['errors']} con error",
+                         '  ' + vs['note']]
         summary = '\n'.join([
             '# APK Lens · Resultado', '',
             f"- URLs: {len(result['urls'])}",
