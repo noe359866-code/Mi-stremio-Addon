@@ -1,11 +1,15 @@
 """Public HTTPS downloads and explicit shared-link resolvers; no JS execution."""
 import re
+import base64
+import binascii
+import time
 import ipaddress
 import socket
 from html.parser import HTMLParser
 from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode, urljoin
 from urllib.request import HTTPRedirectHandler, HTTPCookieProcessor, Request, build_opener
 from http.cookiejar import CookieJar
+from urllib.error import HTTPError, URLError
 from analyzer import MAX_UPLOAD
 
 MAX_PAGE = 2 * 1024 * 1024
@@ -59,18 +63,33 @@ class MediaFirePage(HTMLParser):
 
     def handle_starttag(self, tag, attrs):
         a = dict(attrs)
-        if tag == 'a' and a.get('id') == 'downloadButton' and a.get('href'):
-            self.links.append(a['href'])
+        if tag == 'a' and a.get('id') == 'downloadButton':
+            if a.get('data-scrambled-url'):
+                try:
+                    encoded = a['data-scrambled-url']
+                    if len(encoded) <= 16384:
+                        self.links.append(base64.b64decode(encoded, validate=True).decode('utf-8'))
+                except (ValueError, binascii.Error, UnicodeError):
+                    pass
+            if a.get('href'):
+                self.links.append(a['href'])
 
 
 def mediafire_target(page, base):
     parser = MediaFirePage()
     parser.feed(page)
+    # A literal redirect is parsed as text, never evaluated as JavaScript.
+    parser.links.extend(re.findall(r"window\.location\.href\s*=\s*['\"](https://download[0-9]+\.mediafire\.com/[^'\"\s]+)['\"]", page))
     for link in parser.links:
         target = urljoin(base, link)
-        p = urlsplit(target)
-        if p.scheme == 'https' and p.hostname and p.hostname.endswith('.mediafire.com') and p.hostname.split('.')[0].startswith('download'):
-            return target
+        try:
+            p = urlsplit(target)
+            if (p.scheme == 'https' and p.hostname
+                    and re.fullmatch(r'download[0-9]+\.mediafire\.com', p.hostname)
+                    and not p.username and not p.password and p.port in (None, 443)):
+                return target
+        except ValueError:
+            continue
     raise DownloadError('MediaFire no ofrece un enlace público compatible. Puede requerir captcha, contraseña o haber cambiado su página. Usa una descarga directa autorizada.')
 
 
@@ -101,9 +120,10 @@ def aftv_target(page, base):
     return target
 
 
-def download(url):
+def _download(url):
     url = normalize_link(url)
     opener = build_opener(PublicRedirects(), HTTPCookieProcessor(CookieJar()))
+    deadline = time.monotonic() + 120
     seen = set()
     for _ in range(6):
         url = normalize_link(url)
@@ -112,7 +132,7 @@ def download(url):
         seen.add(url)
         validate_url(url)
         request = Request(url, headers={'User-Agent': 'APK-Lens/2.1', 'Accept-Encoding': 'identity'})
-        with opener.open(request, timeout=45) as response:
+        with opener.open(request, timeout=20) as response:
             final = response.geturl()
             validate_url(final)
             content_type = response.headers.get('Content-Type', '').lower()
@@ -121,7 +141,20 @@ def download(url):
             size = response.headers.get('Content-Length')
             if size and int(size) > limit:
                 raise DownloadError('La descarga supera el límite permitido (APK: 80 MB; página: 2 MB).')
-            blob = response.read(limit + 1)
+            chunks, total = [], 0
+            while True:
+                if time.monotonic() > deadline:
+                    raise DownloadError('La descarga excedió el tiempo máximo de 120 segundos.')
+                # read1 avoids waiting for a complete large buffer on slow streams.
+                reader = getattr(response, 'read1', response.read)
+                chunk = reader(min(65536, limit + 1 - total))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                total += len(chunk)
+                if total > limit:
+                    raise DownloadError('La descarga supera el límite permitido.')
+            blob = b''.join(chunks)
         if len(blob) > limit:
             raise DownloadError('La descarga supera el límite permitido.')
         looks_html = blob.lstrip()[:100].lower().startswith((b'<!doctype html', b'<html'))
@@ -142,3 +175,20 @@ def download(url):
             raise DownloadError('La descarga no parece un APK/ZIP. Revisa que el archivo sea público y el enlace sea correcto.')
         return blob
     raise DownloadError('Se alcanzó el límite de resolución de enlaces.')
+
+
+def download(url):
+    try:
+        return _download(url)
+    except DownloadError:
+        raise
+    except HTTPError as exc:
+        messages = {403: 'El proveedor denegó la descarga (403); puede requerir autorización o bloquear descargas automatizadas.',
+                    404: 'El enlace o archivo no existe (404).',
+                    410: 'El enlace ha caducado o el archivo fue eliminado (410).',
+                    429: 'El proveedor limitó las solicitudes (429). Intenta más tarde.'}
+        raise DownloadError(messages.get(exc.code, 'El proveedor devolvió un error HTTP.')) from None
+    except (URLError, TimeoutError, OSError):
+        raise DownloadError('No se pudo conectar al proveedor: revisa disponibilidad, DNS o TLS. No se desactiva la verificación HTTPS.') from None
+    except ValueError:
+        raise DownloadError('El enlace o las cabeceras de descarga no tienen un formato válido.') from None

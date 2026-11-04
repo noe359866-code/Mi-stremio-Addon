@@ -4,6 +4,7 @@ import html
 from collections import Counter
 from pathlib import Path
 from api_candidates import recommend_apis
+from urllib.parse import urlsplit
 
 SENSITIVE_PERMISSIONS = {
     'READ_CONTACTS': 'Lectura de contactos', 'READ_SMS': 'Lectura de mensajes',
@@ -19,7 +20,11 @@ def enrich(result):
     domains = {}
     for item in result['urls']:
         path = item['url'].split(item['host'], 1)[-1].lower()
-        if item['scheme'] in ('ws', 'wss'):
+        parsed = urlsplit(item['url'])
+        metadata = (parsed.hostname == 'schemas.android.com' and parsed.path.startswith('/apk/')) or (parsed.hostname == 'www.w3.org' and parsed.path in ('/2001/XMLSchema', '/2001/XMLSchema-instance', '/1999/XSL/Transform'))
+        if metadata:
+            category = 'Metadatos XML'
+        elif item['scheme'] in ('ws', 'wss'):
             category = 'WebSocket'
         elif any(x in path for x in ('/api', '/graphql', '/rest/', '/oauth', '/v1/', '/v2/', '/v3/')):
             category = 'Posible API'
@@ -27,7 +32,7 @@ def enrich(result):
             category = 'Recurso'
         else:
             category = 'Otra URL'
-        item.update(category=category, transport='Sin TLS' if item['scheme'] in ('http', 'ws') else 'TLS', confidence='heurística')
+        item.update(category=category, transport='No aplica' if metadata else ('Sin TLS' if item['scheme'] in ('http', 'ws') else 'TLS'), confidence='heurística')
         domain = domains.setdefault(item['host'], {'host': item['host'], 'url_count': 0, 'categories': set(), 'files': set()})
         domain['url_count'] += 1
         domain['categories'].add(category)

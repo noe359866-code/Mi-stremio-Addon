@@ -42,3 +42,9 @@ class ReportsTests(unittest.TestCase):
 
     def test_bad_port_ignored(self):
         self.assertEqual(sample(b'https://example.org:invalid/api')['urls'], [])
+
+    def test_xml_namespace_is_not_cleartext_traffic(self):
+        r = sample(b'http://schemas.android.com/apk/res/android')
+        self.assertEqual(r['urls'][0]['category'], 'Metadatos XML')
+        self.assertEqual(r['summary']['without_tls'], 0)
+        self.assertEqual(r['findings'], [])

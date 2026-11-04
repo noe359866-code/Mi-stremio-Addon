@@ -9,7 +9,7 @@ def recommend_apis(urls):
     for item in urls:
         parsed = urlsplit(item['url'])
         path, host = parsed.path.lower(), parsed.hostname or ''
-        if RESOURCE.search(path) or parsed.scheme in ('ws', 'wss'):
+        if item.get('category') == 'Metadatos XML' or RESOURCE.search(path) or parsed.scheme in ('ws', 'wss'):
             continue
         score, reasons = 0, []
         for pattern, points, reason in [

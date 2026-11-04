@@ -98,3 +98,7 @@ python cli.py --code 5842501
 ```
 
 La cadena código → MediaFire → APK está cubierta con respuestas simuladas. No se ha confirmado la descarga real del código `5842501`: el entorno de desarrollo no tiene acceso a ese proveedor. La compatibilidad depende del formato de respuesta actual de AFTVnews.
+
+## Investigación y validación
+
+Consulta [docs/INVESTIGACION.md](docs/INVESTIGACION.md) para las fuentes revisadas, hallazgos, prueba con un APK real y límites pendientes. MediaFire admite además `data-scrambled-url` Base64 y redirecciones literales restringidas a sus hosts de descarga, sin ejecutar JavaScript. Se descargan bloques de hasta 64 KiB con un presupuesto temporal y errores de proveedor redactados. Namespaces XML conocidos se separan de las conexiones de red para no alertar por tráfico inexistente.
