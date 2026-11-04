@@ -1,0 +1,60 @@
+name: Analizar APK
+run-name: Análisis estático de APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      apk_path:
+        description: 'Ruta del APK dentro del repositorio (alternativa a URL)'
+        required: false
+        type: string
+      apk_url:
+        description: 'URL HTTPS: directa, MediaFire o Dropbox (alternativa a ruta)'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: APK Lens
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Obtener código
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Preparar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Comprobar analizador
+        run: python -m unittest discover -s tests -v
+      - name: Analizar APK sin ejecutarlo
+        env:
+          APK_PATH: ${{ inputs.apk_path }}
+          APK_URL: ${{ inputs.apk_url }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "$APK_PATH" && -z "$APK_URL" ]]; then
+            python cli.py --apk "$APK_PATH"
+          elif [[ -n "$APK_URL" && -z "$APK_PATH" ]]; then
+            python cli.py --url "$APK_URL"
+          else
+            echo 'Indica una ruta o una URL, pero no ambas.'
+            exit 1
+          fi
+      - name: Guardar reporte (sin el APK)
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk-lens-report
+          path: |
+            reports/report.json
+            reports/summary.md
+            reports/report.html
+            reports/connections.csv
+          if-no-files-found: error
+          retention-days: 3
