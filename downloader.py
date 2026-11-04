@@ -1,4 +1,5 @@
 """Public HTTPS downloads and explicit shared-link resolvers; no JS execution."""
+import re
 import ipaddress
 import socket
 from html.parser import HTMLParser
@@ -28,8 +29,18 @@ class PublicRedirects(HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
+def downloader_url(code):
+    code = code.strip()
+    if not re.fullmatch(r'[0-9]{1,10}', code):
+        raise DownloadError('El código Downloader debe contener entre 1 y 10 dígitos.')
+    return 'https://go.aftvnews.com/' + code
+
+
 def normalize_link(url):
     p = urlsplit(url)
+    if p.hostname == 'go.aftvnews.com' and p.scheme == 'http':
+        url = urlunsplit(('https', p.netloc, p.path, p.query, p.fragment))
+        p = urlsplit(url)
     if p.hostname in ('dropbox.com', 'www.dropbox.com'):
         query = [(k, v) for k, v in parse_qsl(p.query, keep_blank_values=True) if k not in ('dl', 'raw')]
         return urlunsplit((p.scheme, p.netloc, p.path, urlencode(query + [('dl', '1')]), ''))
@@ -63,10 +74,42 @@ def mediafire_target(page, base):
     raise DownloadError('MediaFire no ofrece un enlace público compatible. Puede requerir captcha, contraseña o haber cambiado su página. Usa una descarga directa autorizada.')
 
 
+class AFTVPage(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.targets = []
+
+    def handle_starttag(self, tag, attrs):
+        a = dict(attrs)
+        if tag == 'meta' and a.get('http-equiv', '').lower() == 'refresh':
+            match = re.search(r"(?:^|;)\s*url\s*=\s*(.+)$", a.get('content', ''), re.I)
+            if match:
+                self.targets.append(match.group(1).strip().strip("\"'"))
+        if tag == 'a' and a.get('id') in ('redirect-link', 'redirectLink', 'download-link', 'downloadLink') and a.get('href'):
+            self.targets.append(a['href'])
+
+
+def aftv_target(page, base):
+    parser = AFTVPage()
+    parser.feed(page)
+    targets = {urljoin(base, target) for target in parser.targets}
+    if len(targets) != 1:
+        raise DownloadError('Downloader no ofrece un destino inequívoco compatible. Usa el enlace directo; no se ejecuta JavaScript ni se eluden captchas.')
+    target = targets.pop()
+    if target == base or urlsplit(target).scheme != 'https':
+        raise DownloadError('Downloader devolvió un destino no compatible; usa el enlace HTTPS directo.')
+    return target
+
+
 def download(url):
     url = normalize_link(url)
     opener = build_opener(PublicRedirects(), HTTPCookieProcessor(CookieJar()))
-    for _ in range(3):
+    seen = set()
+    for _ in range(6):
+        url = normalize_link(url)
+        if url in seen:
+            raise DownloadError('Se detectó un bucle de redirecciones.')
+        seen.add(url)
         validate_url(url)
         request = Request(url, headers={'User-Agent': 'APK-Lens/2.1', 'Accept-Encoding': 'identity'})
         with opener.open(request, timeout=45) as response:
@@ -84,6 +127,11 @@ def download(url):
         looks_html = blob.lstrip()[:100].lower().startswith((b'<!doctype html', b'<html'))
         if is_html or looks_html:
             host = urlsplit(final).hostname or ''
+            if host == 'go.aftvnews.com':
+                if len(blob) > MAX_PAGE:
+                    raise DownloadError('La página supera los 2 MB.')
+                url = aftv_target(blob.decode('utf-8', 'replace'), final)
+                continue
             if host in ('mediafire.com', 'www.mediafire.com'):
                 if len(blob) > MAX_PAGE:
                     raise DownloadError('La página supera los 2 MB.')

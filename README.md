@@ -80,3 +80,21 @@ El campo `apk_url` de Actions y `cli.py --url` aceptan:
 Se admiten cookies en memoria y redirecciones HTTPS. Se rechazan destinos DNS privados/no globales, páginas genéricas de descarga y archivos sin cabecera ZIP. No hay soporte para login, captchas, contraseñas, cuotas premium ni páginas que exigen ejecutar JavaScript. No se garantiza compatibilidad con todos los enlaces de un servicio: sus páginas pueden cambiar. Las pruebas de MediaFire son con respuestas simuladas, no con descargas reales del proveedor.
 
 **1fichier y otros servicios con formularios/esperas no tienen un resolvedor específico.** Usa un enlace directo autorizado. No pegues credenciales ni enlaces sensibles en inputs de Actions. La validación DNS es una defensa básica, no aislamiento de red frente a DNS rebinding: en despliegues expuestos añade control de salida de red a nivel de infraestructura.
+
+### Código Downloader / go.aftvnews.com
+
+En **Actions → Analizar APK → Run workflow**, completa **exactamente uno**:
+
+- `downloader_code`: por ejemplo `5842501` (solo números).
+- `apk_url`: enlace HTTPS directo o página pública compatible (también admite `https://go.aftvnews.com/5842501`).
+- `apk_path`: ruta de un APK de la rama elegida.
+
+El código se transforma en `https://go.aftvnews.com/<código>`. Se siguen redirecciones HTTP HTTPS, etiquetas HTML `meta refresh` o enlaces de destino con identificadores reconocidos. Si el destino es MediaFire, se continúa con su resolvedor. Los enlaces HTTP de **go.aftvnews.com** se actualizan a HTTPS; no se permite HTTP para otros destinos. Límite: seis pasos de resolución HTML, con detección de bucles y validación de los destinos. No se seleccionan enlaces publicitarios arbitrarios ni se ejecuta JavaScript. Si la página requiere otro mecanismo, se pide el enlace directo.
+
+CLI:
+
+```sh
+python cli.py --code 5842501
+```
+
+La cadena código → MediaFire → APK está cubierta con respuestas simuladas. No se ha confirmado la descarga real del código `5842501`: el entorno de desarrollo no tiene acceso a ese proveedor. La compatibilidad depende del formato de respuesta actual de AFTVnews.

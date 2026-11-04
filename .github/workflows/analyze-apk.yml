@@ -4,6 +4,10 @@ run-name: Análisis estático de APK
 on:
   workflow_dispatch:
     inputs:
+      downloader_code:
+        description: 'Código Downloader de go.aftvnews.com (ejemplo: 5842501). Completa solo un origen.'
+        required: false
+        type: string
       apk_path:
         description: 'Ruta del APK dentro del repositorio (alternativa a URL)'
         required: false
@@ -34,18 +38,26 @@ jobs:
         run: python -m unittest discover -s tests -v
       - name: Analizar APK sin ejecutarlo
         env:
+          DOWNLOADER_CODE: ${{ inputs.downloader_code }}
           APK_PATH: ${{ inputs.apk_path }}
           APK_URL: ${{ inputs.apk_url }}
         shell: bash
         run: |
           set -euo pipefail
-          if [[ -n "$APK_PATH" && -z "$APK_URL" ]]; then
-            python cli.py --apk "$APK_PATH"
-          elif [[ -n "$APK_URL" && -z "$APK_PATH" ]]; then
+          count=0
+          [[ -z "$APK_PATH" ]] || count=$((count + 1))
+          [[ -z "$APK_URL" ]] || count=$((count + 1))
+          [[ -z "$DOWNLOADER_CODE" ]] || count=$((count + 1))
+          if [[ "$count" -ne 1 ]]; then
+            echo 'Completa solo un origen: código Downloader, enlace o ruta de APK.'
+            exit 1
+          fi
+          if [[ -n "$DOWNLOADER_CODE" ]]; then
+            python cli.py --code "$DOWNLOADER_CODE"
+          elif [[ -n "$APK_URL" ]]; then
             python cli.py --url "$APK_URL"
           else
-            echo 'Indica una ruta o una URL, pero no ambas.'
-            exit 1
+            python cli.py --apk "$APK_PATH"
           fi
       - name: Guardar reporte (sin el APK)
         uses: actions/upload-artifact@v4

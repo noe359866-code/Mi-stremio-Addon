@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 from analyzer import MAX_UPLOAD, analyze
 from reporting import write_reports
-from downloader import download, DownloadError
+from downloader import download, downloader_url, DownloadError
 
 
 def main():
@@ -13,10 +13,13 @@ def main():
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument('--apk', help='Ruta de un APK local')
     source.add_argument('--url', help='URL HTTPS directa o enlace público compatible (MediaFire/Dropbox)')
+    source.add_argument('--code', help='Código numérico Downloader de go.aftvnews.com')
     parser.add_argument('--output', default='reports')
     args = parser.parse_args()
     try:
-        if args.url:
+        if args.code:
+            blob = download(downloader_url(args.code))
+        elif args.url:
             blob = download(args.url)
         else:
             with Path(args.apk).open('rb') as stream:
