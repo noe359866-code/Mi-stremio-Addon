@@ -7,8 +7,8 @@ permitidos en este entorno: `github.com`, `api.github.com`, `codeload.github.com
 Se leyeron fuentes de terceros como **referencia de formato y de cobertura**, no
 se copió su código ni se añadieron sus dependencias: APK Lens sigue siendo Python
 3.11+ sin dependencias externas, acotado y offline. Los proveedores de descarga
-(AFTVnews, MediaFire, 1fichier) y la web de Stremio no son accesibles desde aquí;
-no se afirma haberlos consultado en esta ronda.
+(AFTVnews, MediaFire, 1fichier) no son accesibles desde aquí; no se afirma
+haberlos consultado en esta ronda.
 
 Revisiones consultadas (SHA fijado para reproducibilidad):
 
@@ -19,7 +19,6 @@ Revisiones consultadas (SHA fijado para reproducibilidad):
 | [bunseokbot/dexparser](https://github.com/bunseokbot/dexparser) | `b63515d` | Cabecera DEX: `string_ids_size/off` en `0x38/0x3C`, `class_defs` en `0x60`, `string_data_item` ULEB128. |
 | [MobSF/Mobile-Security-Framework-MobSF](https://github.com/MobSF/Mobile-Security-Framework-MobSF) | `9c2c086` | Qué comprueba un escáner maduro: `manifest_analysis.py` (debuggable, allowBackup, cleartext, exportados, browsable) y `cert_analysis.py` (huella, certificado de depuración, versiones de firma). |
 | [dwisiswant0/apkleaks](https://github.com/dwisiswant0/apkleaks) | `dd5271a` | Cobertura de patrones de secretos (`config/regexes.json`): Google API key, AWS, Stripe, Slack, JWT, claves privadas, etc. |
-| [Stremio/stremio-addon-sdk](https://github.com/Stremio/stremio-addon-sdk) | `796ca01` | Protocolo de un addon Stremio (manifest/catalog/meta/stream) para la brecha de producto pendiente. |
 
 Nota: Androguard `master` ya no parsea AXML/DEX en Python puro; delega AXML/ARSC a
 `androguard/axml` y DEX a un núcleo Rust (`dex-parser`). Por eso se tomó la
@@ -46,10 +45,11 @@ Comparando APK Lens 2.1 con esos proyectos, las brechas reales eran:
    aquí todo dominio era "Otra URL" salvo heurística de ruta.
 7. **Hallazgos de manifiesto ausentes.** `debuggable`, `allowBackup`,
    `usesCleartextTraffic` y componentes exportados sin permiso no generaban aviso.
-8. **Brecha de producto: no hay addon Stremio.** El repo se llama
-   `Mi-stremio-Addon` pero solo contiene el analizador. El SDK de Stremio define
-   un servicio HTTP con `manifest.json` y handlers `catalog/meta/stream`; nada de
-   eso existe aún. Ver más abajo.
+
+> Aclaración de identidad: en una primera lectura se interpretó el nombre del repo
+> (`Mi-stremio-Addon`) como un addon de Stremio pendiente. **Es incorrecto.** El
+> proyecto es APK Lens, un analizador estático de APK; no es ni pretende ser un
+> addon. El nombre del repo es histórico. Ver la sección final.
 
 ## Qué se implementó en esta ronda
 
@@ -124,21 +124,35 @@ reportes. `python -m unittest discover -s tests -v`.
   aislamiento de salida contra DNS rebinding, y no exponer el servidor sin
   autenticación/TLS.
 
-## Brecha de producto: el addon Stremio todavía no existe
+## Identidad del proyecto
 
-El objetivo que da nombre al repo (`Mi-stremio-Addon`) requiere un **addon**, no
-solo un analizador. Según `stremio-addon-sdk@796ca01`, un addon es un servicio HTTP
-que expone `GET /manifest.json` y handlers `catalog`, `meta`, `stream` (y
-`subtitles`), con CORS y caché. El analizador ahora produce la materia prima
-(APIs candidatas, deep links, paquete), pero **falta el puente**:
+Este repositorio es **APK Lens**: un analizador estático de APK con interfaz web
+en español, Python 3.11+ sin dependencias externas, acotado y offline. El nombre
+del repo (`Mi-stremio-Addon`) es **histórico y engañoso**: no describe el contenido.
+No hay código de Stremio, ni `manifest.json` de addon, ni handlers
+`catalog/meta/stream`, ni `package.json`. Las únicas coincidencias de palabras
+como "catalog" o "stream" en el código son la heurística de rutas de
+`api_candidates.py` y los *streams* de archivos de Python. No es un addon ni
+pretende serlo; cualquier hoja de ruta debe centrarse en el analizador.
 
-1. Confirmar manualmente qué API del APK objetivo es utilizable y está autorizada
-   (el reporte no verifica endpoints ni permisos de uso).
-2. Construir el addon (Node.js + `stremio-addon-sdk`, o un servidor HTTP mínimo en
-   Python que cumpla el protocolo) con `manifest.json` propio y handlers que
-   consulten esa API confirmada.
-3. Publicarlo/instalarlo en Stremio.
+## Qué queda por hacer en el analizador
 
-No se ha creado el addon en esta ronda porque depende de una API objetivo aún no
-confirmada; crearlo a ciegas sería especulativo. Queda como siguiente paso
-explícito, separado del analizador.
+Ordenado por valor/esfuerzo, todo dentro del alcance de APK Lens:
+
+1. **Mostrar los hallazgos en la web.** La v3 calcula `findings` (debuggable,
+   exportados, certificado de depuración, sin TLS, secretos) y los vuelca en JSON
+   y HTML, pero la interfaz web no tiene pestaña de "Revisión". Cabo suelto rápido.
+2. **`network_security_config.xml`.** Se detecta el atributo del manifiesto pero
+   no se parsea el XML referenciado (dominios con cleartext permitido, pinning).
+3. **Exportación implícita.** Componentes con intent-filter sin `android:exported`
+   explícito son exportados por defecto en Android < 12; conviene señalarlo.
+4. **`resources.arsc` completo.** Hoy solo el pool de cadenas global; faltan
+   nombres de recurso y valores por configuración para saber de qué recurso salió
+   una URL.
+5. **Endurecer el servidor** para uso no local: autenticación, TLS, límites en un
+   proxy y aislamiento de salida (DNS rebinding). Hoy es solo desarrollo.
+6. **Verificación real de descargas.** Captura del flujo AFTVnews `5842501` y
+   resolvedor de 1fichier cuando haya acceso a esos proveedores.
+7. **Mayor profundidad (opcional, rompe el diseño ligero):** descompilación DEX,
+   símbolos de `.so`, soporte AAB/split APKs, verificación criptográfica de firma.
+   Se descartan por ahora para mantener cero dependencias y análisis acotado.

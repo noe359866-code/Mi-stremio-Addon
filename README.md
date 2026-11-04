@@ -136,11 +136,10 @@ Validado con APKs reales de Androguard (TV Leanback, Jamendo, TestActivity) y co
 
 Consulta [docs/INVESTIGACION.md](docs/INVESTIGACION.md) (ronda 1) y
 [docs/INVESTIGACION2.md](docs/INVESTIGACION2.md) (ronda 2: brechas frente a
-Androguard, MobSF, APKLeaks y Stremio SDK, implementación y validación real).
+Androguard, MobSF y APKLeaks, implementación y validación real).
 MediaFire admite además `data-scrambled-url` Base64 y redirecciones literales restringidas a sus hosts de descarga, sin ejecutar JavaScript. Se descargan bloques de hasta 64 KiB con un presupuesto temporal y errores de proveedor redactados. Namespaces XML conocidos se separan de las conexiones de red para no alertar por tráfico inexistente.
 
-**Nota de producto:** el repositorio se llama `Mi-stremio-Addon` pero hoy solo
-contiene el analizador APK Lens. El addon Stremio en sí (servicio HTTP con
-`manifest.json` y handlers `catalog/meta/stream`) sigue pendiente; depende de
-confirmar una API objetivo autorizada. Ver la brecha de producto en
-[docs/INVESTIGACION2.md](docs/INVESTIGACION2.md).
+**Identidad del proyecto:** este repositorio es **APK Lens**, un analizador
+estático de APK. El nombre del repo (`Mi-stremio-Addon`) es histórico y no
+describe el contenido: no es un addon de Stremio ni pretende serlo. No hay código
+de Stremio ni de addons; todo el proyecto es el analizador.
